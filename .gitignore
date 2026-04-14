@@ -1,0 +1,18 @@
+# Verilog simulation outputs
+*.vcd
+*.vvp
+*.fst
+*.lxt
+
+# Synthesis / build artifacts
+build/
+work/
+*.log
+*.jou
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
