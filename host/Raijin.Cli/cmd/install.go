@@ -47,8 +47,12 @@ immediately.`,
 		srcExe, _ := os.Executable()
 		srcDir   := filepath.Dir(srcExe)
 
-		// 1. Copy the binary + DLL into the bin directory.
-		files := []string{"raijin.exe", "raijin.dll"}
+		// 1. Copy the binary + library into the bin directory. Filenames are
+		//    platform-specific (raijin.exe + raijin.dll on Windows,
+		//    raijin + libraijin.so on Linux, raijin + libraijin.dylib on macOS),
+		//    sourced from the same helper uninstall uses.
+		exeName, libName := installedBinaryNames()
+		files := []string{exeName, libName}
 		var copied []string
 		var skipped []string
 		for _, f := range files {
@@ -182,9 +186,10 @@ immediately.`,
 			theme.Value.Render(destDir) + "  " +
 			theme.Mute.Render("is not on your user PATH yet"))
 		fmt.Println()
-		fmt.Println("  " + theme.Label.Render("one-time setup  (PowerShell, user PATH):"))
+		label, command := pathing.AppendInstructions(destDir)
+		fmt.Println("  " + theme.Label.Render(label))
 		fmt.Println()
-		fmt.Println("    " + theme.Heading.Render(pathing.AppendOneLiner(destDir)))
+		fmt.Println("    " + theme.Heading.Render(command))
 		fmt.Println()
 		fmt.Println("  " + theme.Mute.Render("open a fresh terminal afterwards, then:"))
 		fmt.Println("    " + theme.Heading.Render("raijin"))

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# build.sh: compile the Go CLI and drop raijin.dll, built-in programs, and
-# the tiny add/compile SDK next to the exe.
+# build.sh: compile the Go CLI and drop the simulator library, built-in
+# programs, and the tiny add/compile SDK next to the binary. Auto-detects
+# the host OS (Windows MSYS2 vs Linux vs macOS) and produces a portable
+# archive plus, on Windows, a single-file installer.
 #
 # Usage: ./build.sh            (release, stripped)
 #        ./build.sh --debug    (no -s -w, keep DWARF)
@@ -10,12 +12,43 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 OUT_DIR="$SCRIPT_DIR/bin"
-DLL_SRC="$REPO_ROOT/build/sim/bin/raijin.dll"
 PROG_DIR="$OUT_DIR/programs"
 SDK_DIR="$OUT_DIR/sdk"
 INSTALLER_DIR="$SCRIPT_DIR/installer"
 PAYLOAD_PATH="$INSTALLER_DIR/payload.zip"
 PAYLOAD_PLACEHOLDER="PLACEHOLDER"
+
+# ----------------------------------------------------------------------------
+# Host detection. We map uname -s to short tags used throughout the script
+# for naming and conditional steps:
+#   windows  MSYS2/MINGW/Cygwin bash on a Windows host
+#   linux    any Linux distribution
+#   darwin   macOS (untested in CI, included for completeness)
+# ----------------------------------------------------------------------------
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) HOST_OS=windows ;;
+    Linux*)               HOST_OS=linux   ;;
+    Darwin*)              HOST_OS=darwin  ;;
+    *)                    HOST_OS=unknown ;;
+esac
+
+if [[ "$HOST_OS" == "windows" ]]; then
+    EXE_SUFFIX=".exe"
+    LIB_NAME="raijin.dll"
+    ARCHIVE_NAME="raijin-cli-windows-x64.zip"
+elif [[ "$HOST_OS" == "darwin" ]]; then
+    EXE_SUFFIX=""
+    LIB_NAME="libraijin.dylib"
+    ARCHIVE_NAME="raijin-cli-macos-x64.tar.gz"
+else
+    EXE_SUFFIX=""
+    LIB_NAME="libraijin.so"
+    ARCHIVE_NAME="raijin-cli-linux-x64.tar.gz"
+fi
+
+CLI_NAME="raijin${EXE_SUFFIX}"
+LIB_SRC="$REPO_ROOT/build/sim/bin/$LIB_NAME"
+ARCHIVE_PATH="$OUT_DIR/$ARCHIVE_NAME"
 
 mkdir -p "$OUT_DIR"
 mkdir -p "$PROG_DIR" "$SDK_DIR"
@@ -39,21 +72,29 @@ restore_placeholder() {
 }
 trap restore_placeholder EXIT
 
-echo "[1/7] go build raijin.exe  (ldflags: $CLI_LDFLAGS)"
-( cd "$SCRIPT_DIR" && go build -ldflags "$CLI_LDFLAGS" -o "$OUT_DIR/raijin.exe" . )
-
-echo "[2/7] deploy raijin.dll"
-if [[ -f "$DLL_SRC" ]]; then
-    if cp "$DLL_SRC" "$OUT_DIR/raijin.dll"; then
-        echo "     $OUT_DIR/raijin.dll  ($(stat -c %s "$OUT_DIR/raijin.dll" 2>/dev/null || wc -c <"$OUT_DIR/raijin.dll") bytes)"
-    else
-        echo "     warning: could not overwrite $OUT_DIR/raijin.dll (likely locked by a running process)"
-    fi
+# How many steps total. Windows builds the installer too, so it has one
+# extra step.
+if [[ "$HOST_OS" == "windows" ]]; then
+    TOTAL=7
 else
-    echo "     warning: $DLL_SRC not found — build sim/ first"
+    TOTAL=6
 fi
 
-echo "[3/7] package built-in programs"
+echo "[1/$TOTAL] go build $CLI_NAME  (host=$HOST_OS, ldflags: $CLI_LDFLAGS)"
+( cd "$SCRIPT_DIR" && go build -ldflags "$CLI_LDFLAGS" -o "$OUT_DIR/$CLI_NAME" . )
+
+echo "[2/$TOTAL] deploy $LIB_NAME"
+if [[ -f "$LIB_SRC" ]]; then
+    if cp "$LIB_SRC" "$OUT_DIR/$LIB_NAME"; then
+        echo "     $OUT_DIR/$LIB_NAME  ($(stat -c %s "$OUT_DIR/$LIB_NAME" 2>/dev/null || wc -c <"$OUT_DIR/$LIB_NAME") bytes)"
+    else
+        echo "     warning: could not overwrite $OUT_DIR/$LIB_NAME (likely locked by a running process)"
+    fi
+else
+    echo "     warning: $LIB_SRC not found  build sim/ first (cmake -S sim -B build/sim && cmake --build build/sim)"
+fi
+
+echo "[3/$TOTAL] package built-in programs"
 for rel in \
     "raijin/programs/snake.hex" \
     "raijin/programs/matrix.hex" \
@@ -69,8 +110,9 @@ do
     fi
 done
 
-echo "[4/7] write README.txt"
-cat > "$OUT_DIR/README.txt" <<'EOF'
+echo "[4/$TOTAL] write README.txt"
+if [[ "$HOST_OS" == "windows" ]]; then
+    cat > "$OUT_DIR/README.txt" <<'EOF'
 Raijin CLI  Windows x64
 ========================
 
@@ -100,32 +142,77 @@ If raijin.exe reports "cannot load raijin.dll":
   Extract the zip again so raijin.exe and raijin.dll live in the SAME
   directory. Some archive tools split files across subfolders.
 EOF
+else
+    cat > "$OUT_DIR/README.txt" <<EOF
+Raijin CLI  ${HOST_OS} x64
+========================
+
+This tarball is the portable bundle: raijin + ${LIB_NAME} + demo programs
++ compile SDK. Run things from this directory with ./raijin ...
+
+Want raijin available from any terminal?
+  ./raijin install
+  (drops a copy into ~/.raijin/bin and prints the one-liner you can paste
+  into your shell rc to put ~/.raijin/bin on \$PATH)
+
+Quickstart:
+  ./raijin --help
+  ./raijin run matrix
+  ./raijin run snake
+  ./raijin run donut
+  ./raijin run doom
+
+Controls:
+  Ctrl+C    quit
+  stdin     forwarded to the simulator's UART RX
+  stdout    receives UART TX
+
+Compile your own program:
+  See sdk/c-runtime/ and sdk/runners/elf2hex.py
+
+If ./raijin reports "cannot load ${LIB_NAME}":
+  Make sure raijin and ${LIB_NAME} live in the SAME directory.
+  On Linux, run \`ldd ${LIB_NAME}\` to see if a system library is missing.
+EOF
+fi
 echo "     wrote $OUT_DIR/README.txt"
 
-echo "[5/7] package compile SDK"
+echo "[5/$TOTAL] package compile SDK"
 rm -rf "$SDK_DIR/c-runtime" "$SDK_DIR/runners"
 mkdir -p "$SDK_DIR"
 cp -R "$REPO_ROOT/tools/c-runtime" "$SDK_DIR/c-runtime"
 mkdir -p "$SDK_DIR/runners"
 cp "$REPO_ROOT/tools/runners/elf2hex.py" "$SDK_DIR/runners/elf2hex.py"
 
-echo "[6/7] zip portable bundle"
-ZIP_PATH="$OUT_DIR/raijin-cli-windows-x64.zip"
-rm -f "$ZIP_PATH"
-# Use PowerShell's Compress-Archive when available so the layout matches
-# what CI produces. PowerShell wants native Windows paths, hence cygpath.
-if command -v powershell >/dev/null 2>&1 && command -v cygpath >/dev/null 2>&1; then
-    SRC_WIN="$(cygpath -w "$OUT_DIR")"
-    DST_WIN="$(cygpath -w "$ZIP_PATH")"
-    powershell -NoProfile -Command "Compress-Archive -Path '$SRC_WIN\\*' -DestinationPath '$DST_WIN' -Force" >/dev/null
+echo "[6/$TOTAL] archive portable bundle  $ARCHIVE_NAME"
+rm -f "$ARCHIVE_PATH"
+if [[ "$HOST_OS" == "windows" ]]; then
+    # PowerShell's Compress-Archive matches what CI produces on windows-latest
+    # so power users see the same layout. PowerShell wants native Windows
+    # paths, hence cygpath.
+    if command -v powershell >/dev/null 2>&1 && command -v cygpath >/dev/null 2>&1; then
+        SRC_WIN="$(cygpath -w "$OUT_DIR")"
+        DST_WIN="$(cygpath -w "$ARCHIVE_PATH")"
+        powershell -NoProfile -Command "Compress-Archive -Path '$SRC_WIN\\*' -DestinationPath '$DST_WIN' -Force" >/dev/null
+    else
+        ( cd "$OUT_DIR" && zip -qr "$ARCHIVE_PATH" "$CLI_NAME" "$LIB_NAME" programs sdk README.txt )
+    fi
 else
-    ( cd "$OUT_DIR" && zip -qr "$ZIP_PATH" raijin.exe raijin.dll programs sdk README.txt )
+    # Unix tar.gz. We tar the bundle's contents (not the parent dir) so
+    # extracting puts files in the user's chosen directory directly,
+    # matching the Windows zip's flat layout.
+    ( cd "$OUT_DIR" && tar -czf "$ARCHIVE_PATH" "$CLI_NAME" "$LIB_NAME" programs sdk README.txt )
 fi
-echo "     wrote $ZIP_PATH  ($(stat -c %s "$ZIP_PATH" 2>/dev/null || wc -c <"$ZIP_PATH") bytes)"
+echo "     wrote $ARCHIVE_PATH  ($(stat -c %s "$ARCHIVE_PATH" 2>/dev/null || wc -c <"$ARCHIVE_PATH") bytes)"
 
-echo "[7/7] go build raijin-setup.exe (with embedded payload)"
-cp "$ZIP_PATH" "$PAYLOAD_PATH"
-( cd "$SCRIPT_DIR" && go build -ldflags "$SETUP_LDFLAGS" -o "$OUT_DIR/raijin-setup.exe" ./installer )
-# trap (set above) restores the placeholder so the working tree is clean.
-
-ls -la "$OUT_DIR/raijin.exe" "$OUT_DIR/raijin-setup.exe"
+if [[ "$HOST_OS" == "windows" ]]; then
+    echo "[7/$TOTAL] go build raijin-setup.exe (with embedded payload)"
+    cp "$ARCHIVE_PATH" "$PAYLOAD_PATH"
+    ( cd "$SCRIPT_DIR" && go build -ldflags "$SETUP_LDFLAGS" -o "$OUT_DIR/raijin-setup.exe" ./installer )
+    # trap (set above) restores the placeholder so the working tree is clean.
+    ls -la "$OUT_DIR/$CLI_NAME" "$OUT_DIR/raijin-setup.exe"
+else
+    # No installer .exe on Linux/macOS  the tarball + `./raijin install`
+    # is the standard pattern.
+    ls -la "$OUT_DIR/$CLI_NAME"
+fi

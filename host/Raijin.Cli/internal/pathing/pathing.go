@@ -2,17 +2,16 @@
 // shared by the `raijin` CLI (install / uninstall subcommands) and the
 // raijin-setup installer binary.
 //
-// Everything here is Windows-flavored: the PATH read/write goes through
-// PowerShell because the User scope of the registry is what survives a
-// reboot, and HKCU\Environment is what File Explorer's "Edit environment
-// variables" UI actually edits. Calling this on Linux/macOS is undefined.
+// Cross-platform pieces (UserInstallDirs, AbsSameFile, the path-list
+// manipulation helpers) live here. Platform-specific behavior lives in
+// pathing_windows.go (PowerShell + HKCU\Environment registry) and
+// pathing_unix.go (shell rc-file append).
 package pathing
 
 import (
-	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -25,8 +24,9 @@ const (
 )
 
 // UserInstallDirs returns the canonical install root and its bin/programs
-// children under the user's home directory. The directories are NOT created;
-// the caller does that with the right scope.
+// children under the user's home directory. The directories are NOT
+// created; the caller does that with the right scope. Layout is identical
+// across Windows and Unix to keep documentation simple.
 func UserInstallDirs() (root, binDir, progDir string, err error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -39,7 +39,8 @@ func UserInstallDirs() (root, binDir, progDir string, err error) {
 }
 
 // UserPathContainsDir reports whether dir is currently part of the user
-// PATH (HKCU\Environment\Path).
+// PATH. The notion of "user PATH" is platform-specific (registry on
+// Windows, shell rc on Unix); both are routed through ReadUserPath.
 func UserPathContainsDir(dir string) (bool, error) {
 	pathValue, err := ReadUserPath()
 	if err != nil {
@@ -48,83 +49,9 @@ func UserPathContainsDir(dir string) (bool, error) {
 	return ListContainsDir(pathValue, dir), nil
 }
 
-// UpdateUserPathDir adds or removes dir from the user PATH and reports
-// whether the value actually changed. Idempotent: adding an already-present
-// dir or removing an absent one is a no-op and returns (false, nil).
-func UpdateUserPathDir(dir string, mode Mode) (bool, error) {
-	pathValue, err := ReadUserPath()
-	if err != nil {
-		return false, err
-	}
-
-	var next string
-	switch mode {
-	case ModeAdd:
-		next = ListAppendDir(pathValue, dir)
-	case ModeRemove:
-		next = ListRemoveDir(pathValue, dir)
-	default:
-		next = pathValue
-	}
-
-	if next == pathValue {
-		return false, nil
-	}
-	if err := WriteUserPath(next); err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
-// ReadUserPath returns the current value of the user-scoped Path env var.
-func ReadUserPath() (string, error) {
-	cmd := exec.Command("powershell", "-NoProfile", "-Command",
-		"[Environment]::GetEnvironmentVariable('Path','User')")
-	out, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-// WriteUserPath persists pathValue as the user Path env var. New shells
-// pick it up; the running process does not see the change.
-func WriteUserPath(pathValue string) error {
-	command := "[Environment]::SetEnvironmentVariable('Path', " + PsSingleQuoted(pathValue) + ", 'User')"
-	cmd := exec.Command("powershell", "-NoProfile", "-Command", command)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
-
-// AppendOneLiner returns an idempotent PowerShell one-liner that appends
-// dir to the user PATH. Useful when we want to print copy-pasteable
-// instructions instead of touching the registry ourselves.
-func AppendOneLiner(dir string) string {
-	quoted := PsSingleQuoted(dir)
-	return `$p=[Environment]::GetEnvironmentVariable('Path','User'); ` +
-		`$d=` + quoted + `; ` +
-		`$items=@(); if ($p) { $items += ($p -split ';' | Where-Object { $_ }); } ` +
-		`if ($items -notcontains $d) { $items += $d; [Environment]::SetEnvironmentVariable('Path', ($items -join ';'), 'User') }`
-}
-
-// RemoveOneLiner is the symmetric removal one-liner.
-func RemoveOneLiner(dir string) string {
-	quoted := PsSingleQuoted(dir)
-	return `$p=[Environment]::GetEnvironmentVariable('Path','User'); ` +
-		`$d=` + quoted + `; ` +
-		`$items=@(); if ($p) { $items += ($p -split ';' | Where-Object { $_ -and $_ -ne $d }); } ` +
-		`[Environment]::SetEnvironmentVariable('Path', ($items -join ';'), 'User')`
-}
-
-// PsSingleQuoted wraps s in single quotes for PowerShell, escaping any
-// embedded single quote by doubling it.
-func PsSingleQuoted(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
-}
-
-// ListContainsDir reports whether pathValue (a `;`-separated PATH string)
-// contains dir, using case-insensitive directory-aware comparison.
+// ListContainsDir reports whether pathValue (a separator-joined PATH
+// string) contains dir. Comparison is case-insensitive on Windows,
+// case-sensitive on Unix  matching how the OS itself resolves PATH.
 func ListContainsDir(pathValue, dir string) bool {
 	normalizedDir := normalizeDir(dir)
 	for _, item := range listItems(pathValue) {
@@ -162,7 +89,7 @@ func ListRemoveDir(pathValue, dir string) string {
 }
 
 // listItems splits a PATH string, trims each entry, drops empties, and
-// dedupes case-insensitively.
+// dedupes (case-insensitively on Windows, exact-match on Unix).
 func listItems(pathValue string) []string {
 	raw := filepath.SplitList(pathValue)
 	items := make([]string, 0, len(raw))
@@ -182,8 +109,14 @@ func listItems(pathValue string) []string {
 	return items
 }
 
+// normalizeDir folds the directory string to a comparison-friendly form.
+// Windows file system is case-insensitive so we lowercase; Unix is
+// case-sensitive so we only clean.
 func normalizeDir(path string) string {
-	return strings.ToLower(filepath.Clean(path))
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(filepath.Clean(path))
+	}
+	return filepath.Clean(path)
 }
 
 // AbsSameFile reports whether two paths resolve to the same on-disk file.
@@ -195,9 +128,9 @@ func AbsSameFile(a, b string) bool {
 	if err1 != nil || err2 != nil {
 		return false
 	}
-	return strings.EqualFold(filepath.Clean(aa), filepath.Clean(bb))
+	ca, cb := filepath.Clean(aa), filepath.Clean(bb)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(ca, cb)
+	}
+	return ca == cb
 }
-
-// Sentinel for callers that want a clear error type when PowerShell
-// inspection fails. Currently unused but reserved.
-var ErrPowerShell = fmt.Errorf("powershell call failed")

@@ -3,15 +3,27 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
 
 	"github.com/AinsAlmeyn/raijin-cli/internal/pathing"
 	"github.com/AinsAlmeyn/raijin-cli/internal/theme"
 	"github.com/spf13/cobra"
 )
+
+// installedBinaryNames returns the platform-specific filenames that the
+// installer drops into ~/.raijin/bin: raijin.exe + raijin.dll on Windows,
+// raijin + libraijin.so on Linux, raijin + libraijin.dylib on macOS.
+func installedBinaryNames() (exeName, libName string) {
+	switch runtime.GOOS {
+	case "windows":
+		return "raijin.exe", "raijin.dll"
+	case "darwin":
+		return "raijin", "libraijin.dylib"
+	default:
+		return "raijin", "libraijin.so"
+	}
+}
 
 var (
 	uninstallKeepPath   bool
@@ -32,16 +44,22 @@ is passed.`,
 		if err != nil {
 			return fmt.Errorf("cannot locate home dir: %w", err)
 		}
-		targetExe := filepath.Join(binDir, "raijin.exe")
-		targetDLL := filepath.Join(binDir, "raijin.dll")
+		exeName, libName := installedBinaryNames()
+		targetExe := filepath.Join(binDir, exeName)
+		targetDLL := filepath.Join(binDir, libName)
 		selfRun := isCurrentExecutable(targetExe)
+		// On Windows, deleting a running .exe fails (the OS keeps the file
+		// locked), so we queue the cleanup for after-exit. On Unix, deleting
+		// the running binary works fine because the kernel keeps the inode
+		// alive until the process closes; we just delete inline.
+		needsScheduledCleanup := selfRun && selfUninstallNeedsScheduling
 
 		var removed []string
 		var scheduled []string
 		var missing []string
 
 		for _, path := range []string{targetExe, targetDLL} {
-			if selfRun {
+			if needsScheduledCleanup {
 				if fileExists(path) {
 					scheduled = append(scheduled, path)
 				} else {
@@ -70,7 +88,7 @@ is passed.`,
 			}
 		}
 
-		if !selfRun {
+		if !needsScheduledCleanup {
 			_ = removeDirIfEmpty(binDir)
 			_ = removeDirIfEmpty(rootDir)
 		}
@@ -83,9 +101,9 @@ is passed.`,
 			}
 		}
 
-		if selfRun {
+		if needsScheduledCleanup {
 			cleanupDirs := []string{binDir, rootDir}
-			if err := scheduleWindowsCleanup(scheduled, cleanupDirs); err != nil {
+			if err := scheduleSelfCleanup(scheduled, cleanupDirs); err != nil {
 				return err
 			}
 		}
@@ -126,7 +144,7 @@ is passed.`,
 			fmt.Println()
 			fmt.Println("  " + theme.Mute.Render("bundled demo hex files were kept; pass --purge-programs to remove them too"))
 		}
-		if selfRun {
+		if needsScheduledCleanup {
 			fmt.Println()
 			fmt.Println("  " + theme.Mute.Render("the running installed copy cannot be deleted mid-process on Windows, so cleanup was queued for immediately after exit"))
 		}
@@ -187,44 +205,6 @@ func removeDirIfEmpty(path string) error {
 		return err
 	}
 	return nil
-}
-
-func scheduleWindowsCleanup(files, dirs []string) error {
-	if len(files) == 0 {
-		return nil
-	}
-	if runtime.GOOS != "windows" {
-		return fmt.Errorf("self-uninstall cleanup scheduling is only implemented on Windows")
-	}
-	command := buildCleanupPowerShell(files, dirs)
-	cmd := exec.Command("powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", command)
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start cleanup helper: %w", err)
-	}
-	return nil
-}
-
-func buildCleanupPowerShell(files, dirs []string) string {
-	var builder strings.Builder
-	builder.WriteString("$files=@(")
-	for i, path := range files {
-		if i > 0 {
-			builder.WriteString(",")
-		}
-		builder.WriteString(pathing.PsSingleQuoted(path))
-	}
-	builder.WriteString("); ")
-	builder.WriteString("$dirs=@(")
-	for i, path := range dirs {
-		if i > 0 {
-			builder.WriteString(",")
-		}
-		builder.WriteString(pathing.PsSingleQuoted(path))
-	}
-	builder.WriteString("); ")
-	builder.WriteString("for($i=0; $i -lt 100; $i++){ $pending=$false; foreach($f in $files){ if(Test-Path -LiteralPath $f){ try { Remove-Item -LiteralPath $f -Force -ErrorAction Stop } catch { $pending=$true } } }; if(-not $pending){ break }; Start-Sleep -Milliseconds 200 }; ")
-	builder.WriteString("foreach($d in $dirs){ if(Test-Path -LiteralPath $d){ $items = @(Get-ChildItem -LiteralPath $d -Force -ErrorAction SilentlyContinue); if($items.Count -eq 0){ Remove-Item -LiteralPath $d -Force -ErrorAction SilentlyContinue } } }")
-	return builder.String()
 }
 
 func init() {

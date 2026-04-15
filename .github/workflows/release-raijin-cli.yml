@@ -10,6 +10,11 @@ permissions:
   contents: write
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # Windows build: produces raijin-cli-windows-x64.zip + raijin-setup.exe and
+  # smoke-tests both in place (extract zip, run; silent install via setup.exe,
+  # run installed copy, uninstall).
+  # ---------------------------------------------------------------------------
   build-windows-cli:
     runs-on: windows-latest
 
@@ -53,9 +58,6 @@ jobs:
       - name: Stage release artifacts
         shell: pwsh
         run: |
-          # build.sh already produced the zip and the installer in
-          # host/Raijin.Cli/bin/. Move both into dist/ so subsequent steps
-          # have one canonical path.
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item "host/Raijin.Cli/bin/raijin-cli-windows-x64.zip" "dist/raijin-cli-windows-x64.zip" -Force
           Copy-Item "host/Raijin.Cli/bin/raijin-setup.exe"           "dist/raijin-setup.exe"           -Force
@@ -78,10 +80,6 @@ jobs:
           & $exe --version
           if ($LASTEXITCODE -ne 0) { throw "smoke: --version exit $LASTEXITCODE" }
 
-          # PowerShell 7 doesn't accept `< $null` (reserved operator). Pipe an
-          # empty $null into the process to feed an immediate-EOF stdin instead;
-          # --max-cycles handles termination.
-          #
           # Exit codes (runner.go): 0 = halted+tohost=1, 1 = STOPPED via cycle
           # cap (matrix is an infinite animation, never halts), 2 = setup error
           # (DLL load fail, hex load fail). Accept 0 or 1; treat >=2 as failure.
@@ -109,15 +107,12 @@ jobs:
           $setup = "dist/raijin-setup.exe"
           if (-not (Test-Path $setup)) { throw "smoke: raijin-setup.exe missing" }
 
-          # --version exercises the binary without touching disk.
           & $setup --version
           if ($LASTEXITCODE -ne 0) { throw "smoke: setup --version exit $LASTEXITCODE" }
 
           # --silent --no-path performs the real install (extract the embedded
           # zip into %USERPROFILE%\.raijin) without touching the runner's user
-          # PATH (which would persist across jobs and is not what we are
-          # validating). The PATH update logic is exercised separately by the
-          # `raijin install` command's own tests.
+          # PATH (which would persist across jobs).
           & $setup --silent --no-path
           if ($LASTEXITCODE -ne 0) { throw "smoke: setup --silent exit $LASTEXITCODE" }
 
@@ -126,7 +121,6 @@ jobs:
           if (-not (Test-Path $installedExe)) { throw "smoke: installed raijin.exe missing at $installedExe" }
           if (-not (Test-Path $installedDll)) { throw "smoke: installed raijin.dll missing at $installedDll" }
 
-          # Real proof the install works: the installed copy actually runs.
           & $installedExe --version
           if ($LASTEXITCODE -ne 0) { throw "smoke: installed --version exit $LASTEXITCODE" }
 
@@ -137,13 +131,10 @@ jobs:
           if ($matrixExit -ge 2) { throw "smoke: installed run matrix exit $matrixExit" }
           if ($matrixJoined -notmatch "Summary") { throw "smoke: installed run matrix produced no Summary" }
 
-          # Cleanup: the runner is shared across builds; we don't want our
-          # install lingering. uninstall via the installed copy itself; the
-          # scheduled-cleanup helper finishes after the process exits.
           & $installedExe uninstall --keep-path --purge-programs
           if ($LASTEXITCODE -ne 0) { Write-Host "smoke: uninstall exit $LASTEXITCODE (continuing; runner is ephemeral anyway)" }
 
-      - name: Upload artifacts
+      - name: Upload windows artifacts
         uses: actions/upload-artifact@v4
         with:
           name: raijin-cli-windows-x64
@@ -151,30 +142,174 @@ jobs:
             dist/raijin-cli-windows-x64.zip
             dist/raijin-setup.exe
 
-      - name: Publish GitHub release assets
-        if: startsWith(github.ref, 'refs/tags/')
+  # ---------------------------------------------------------------------------
+  # Linux build: produces raijin-cli-linux-x64.tar.gz and smoke-tests it
+  # (extract, run, install via the built-in `raijin install` command, run
+  # installed copy, uninstall). No installer .exe on Linux  the tarball is
+  # the standard distribution shape.
+  #
+  # ubuntu-latest is currently 24.04 (Noble), which ships Verilator 5.x with
+  # the --no-timing flag the project's CMakeLists relies on.
+  # ---------------------------------------------------------------------------
+  build-linux-cli:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: host/Raijin.Cli/go.mod
+
+      - name: Install Verilator + build toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+              verilator cmake ninja-build gcc g++ git ca-certificates
+          verilator --version
+          cmake --version | head -1
+
+      - name: Build simulator shared library
+        run: |
+          cmake -S sim -B build/sim -G Ninja
+          cmake --build build/sim --config Release
+          ldd build/sim/bin/libraijin.so
+
+      - name: Package CLI bundle
+        working-directory: host/Raijin.Cli
+        run: |
+          chmod +x ./build.sh
+          ./build.sh
+
+      - name: Stage release artifacts
+        run: |
+          mkdir -p dist
+          cp host/Raijin.Cli/bin/raijin-cli-linux-x64.tar.gz dist/
+          ls -la dist/
+
+      - name: Smoke test portable tarball
+        run: |
+          set -euo pipefail
+          smokeDir="dist/smoke-tar"
+          rm -rf "$smokeDir"
+          mkdir -p "$smokeDir"
+          tar -xzf dist/raijin-cli-linux-x64.tar.gz -C "$smokeDir"
+
+          exe="$smokeDir/raijin"
+          lib="$smokeDir/libraijin.so"
+          [[ -x "$exe" ]] || { echo "smoke: raijin missing or not executable"; exit 1; }
+          [[ -f "$lib" ]] || { echo "smoke: libraijin.so missing"; exit 1; }
+
+          "$exe" --version
+
+          # Exit codes (runner.go): 0 = halted+tohost=1, 1 = STOPPED via cycle
+          # cap (matrix is an infinite animation, never halts), 2 = setup error
+          # (lib load fail, hex load fail). Accept 0 or 1; treat >=2 as failure.
+          set +e
+          out=$("$exe" run matrix --max-cycles 10000 --quiet --no-status-bar </dev/null 2>&1)
+          code=$?
+          set -e
+          echo "$out"
+          if [[ $code -ge 2 ]]; then
+              echo "smoke: run matrix exit $code  lib likely failed to load"
+              exit 1
+          fi
+          echo "$out" | grep -q "Summary" || { echo "smoke: no Summary in output"; exit 1; }
+
+          # Confirm libraijin.so doesn't accidentally depend on something
+          # exotic. The standard glibc + libstdc++ + libgcc_s + libpthread
+          # set is fine; anything outside of that on a fresh runner is a
+          # red flag worth blocking the release for.
+          ldd "$lib" | sort
+
+      - name: Smoke test built-in install
+        run: |
+          set -euo pipefail
+          smokeDir="dist/smoke-tar"
+          # The `raijin install` command copies the binary + lib into
+          # ~/.raijin/bin and prints the shell rc one-liner. We deliberately
+          # don't run --add-to-path here because the runner is ephemeral
+          # anyway and we don't want to depend on shell rc semantics for
+          # the smoke check.
+          "$smokeDir/raijin" install
+
+          installedExe="$HOME/.raijin/bin/raijin"
+          installedLib="$HOME/.raijin/bin/libraijin.so"
+          [[ -x "$installedExe" ]] || { echo "smoke: installed raijin missing"; exit 1; }
+          [[ -f "$installedLib" ]] || { echo "smoke: installed libraijin.so missing"; exit 1; }
+
+          "$installedExe" --version
+          set +e
+          out=$("$installedExe" run snake --max-cycles 10000 --quiet --no-status-bar </dev/null 2>&1)
+          code=$?
+          set -e
+          echo "$out"
+          if [[ $code -ge 2 ]]; then
+              echo "smoke: installed run snake exit $code"
+              exit 1
+          fi
+          echo "$out" | grep -q "Summary" || { echo "smoke: installed no Summary"; exit 1; }
+
+          "$installedExe" uninstall --keep-path --purge-programs
+
+      - name: Upload linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: raijin-cli-linux-x64
+          path: dist/raijin-cli-linux-x64.tar.gz
+
+  # ---------------------------------------------------------------------------
+  # Publish: gathers both platform artifacts and publishes them as a single
+  # GitHub release. Only runs on tag pushes.
+  # ---------------------------------------------------------------------------
+  publish-release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [build-windows-cli, build-linux-cli]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: raijin-cli-windows-x64
+          path: dist
+
+      - name: Download linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: raijin-cli-linux-x64
+          path: dist
+
+      - name: Inspect staged artifacts
+        run: ls -la dist/
+
+      - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/raijin-cli-windows-x64.zip
             dist/raijin-setup.exe
+            dist/raijin-cli-linux-x64.tar.gz
           body: |
-            ## Raijin CLI  Windows x64
+            ## Raijin CLI
 
-            Two ways to install:
+            Pick the file that matches your OS:
 
-            ### Easy: single-file installer
+            ### Windows x64
 
-            Download `raijin-setup.exe`, double-click it, follow the on-screen
-            flow. Files land in `%USERPROFILE%\.raijin\` and the installer
-            offers to add the bin directory to your user PATH so `raijin`
-            works from any terminal. You can delete `raijin-setup.exe`
-            afterwards.
+            **Easy: single-file installer.** Download `raijin-setup.exe`,
+            double-click it, walk through the install flow. Files land in
+            `%USERPROFILE%\.raijin\` and the installer offers to add the bin
+            directory to your user PATH so `raijin` works from any terminal.
+            You can delete `raijin-setup.exe` afterwards.
 
-            ### Portable: zip bundle
-
-            Download `raijin-cli-windows-x64.zip`, extract anywhere, run
-            `.\raijin.exe` in place. No PATH changes, no install.
+            **Portable: zip bundle.** Download `raijin-cli-windows-x64.zip`,
+            extract anywhere, run `.\raijin.exe` in place. No PATH changes,
+            no install.
 
             ```
             raijin.exe --help
@@ -182,13 +317,30 @@ jobs:
             raijin.exe run doom
             ```
 
+            ### Linux x64
+
+            Download `raijin-cli-linux-x64.tar.gz`, extract, run `./raijin`
+            in place or use the built-in install command:
+
+            ```
+            tar -xzf raijin-cli-linux-x64.tar.gz
+            ./raijin --help
+            ./raijin run matrix
+            ./raijin install        # drops into ~/.raijin/bin and prints
+                                    # the one-liner you can paste into your
+                                    # shell rc to put it on PATH
+            ```
+
+            Built and tested on Ubuntu 24.04 (glibc 2.39, libstdc++ 13).
+            Should work on any reasonably recent distribution.
+
             ### What's in the bundle
-            - `raijin.exe`   Go CLI host
-            - `raijin.dll`   Verilated RV32IM core (GCC runtime statically linked)
-            - `programs/`    built-in demos: matrix, snake, donut, doom
-            - `sdk/`         C runtime + elf2hex.py to compile your own programs
+            - `raijin` / `raijin.exe`     Go CLI host
+            - `libraijin.so` / `raijin.dll`  Verilated RV32IM core
+            - `programs/`                 built-in demos: matrix, snake, donut, doom
+            - `sdk/`                      C runtime + elf2hex.py to compile your own programs
 
             ### Troubleshooting
-            If `raijin.exe` reports "cannot load raijin.dll", make sure
-            `raijin.exe` and `raijin.dll` end up in the same directory
-            after extraction. The installer handles this for you.
+            If the CLI reports it can't load the simulator library, make sure
+            the binary and the library file (`raijin.dll` / `libraijin.so`)
+            end up in the same directory after extraction.

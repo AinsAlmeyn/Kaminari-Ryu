@@ -1,21 +1,21 @@
-// Package sim binds the Raijin simulator DLL via purego + Windows
-// syscalls. No cgo toolchain required.
+// Package sim binds the Raijin simulator shared library via purego. On
+// Windows the library ships as raijin.dll and is opened with LoadLibrary
+// (loader_windows.go). On Linux/macOS it ships as libraijin.so /
+// libraijin.dylib and is opened with dlopen (loader_unix.go). Both paths
+// converge on bindAll() below to wire purego function pointers.
+//
+// No cgo toolchain required.
 package sim
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
-	"runtime"
-	"strings"
-	"syscall"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
-	"golang.org/x/sys/windows"
 )
 
-// Sim is an opaque handle to a Verilated Raijin instance living in the DLL.
+// Sim is an opaque handle to a Verilated Raijin instance living in the
+// shared library.
 type Sim struct {
 	h uintptr
 }
@@ -23,7 +23,7 @@ type Sim struct {
 // Out-param note: the C API takes `T*` pointers for arrays-of-T. We
 // express these as uintptr on the Go side and convert once with
 // unsafe.Pointer at the call site. An earlier attempt via []byte /
-// []uint64 slice types returned all zeros on Windows — purego's slice
+// []uint64 slice types returned all zeros on Windows  purego's slice
 // header handling appears to mismatch the ABI some callers expect.
 // Raw uintptr is unambiguous.
 var (
@@ -47,75 +47,27 @@ var (
 	dllLoaded bool
 )
 
-// Load opens raijin.dll. Looks next to the exe first, then anywhere the
-// Windows loader would search. Safe to call repeatedly — only opens once.
-func Load() error {
-	if dllLoaded {
-		return nil
-	}
-	if runtime.GOOS != "windows" {
-		return fmt.Errorf("only windows supported right now (runtime=%s)", runtime.GOOS)
-	}
-
-	// Try next to the exe first; fall back to the default loader search path.
-	exe, _ := exeDir()
-	candidates := []string{
-		filepath.Join(exe, "raijin.dll"),
-		"raijin.dll",
-	}
-
-	var handle windows.Handle
-	var lastErr error
-	var attempts []string
-	for _, c := range candidates {
-		h, err := windows.LoadLibrary(c)
-		if err == nil {
-			handle = h
-			lastErr = nil
-			break
-		}
-		attempts = append(attempts, fmt.Sprintf("  %s -> %v", c, err))
-		lastErr = err
-	}
-	if lastErr != nil {
-		// errno 126 (ERROR_MOD_NOT_FOUND) on a path that exists means the
-		// DLL itself was found but one of its dependencies was not. Tell
-		// the user instead of leaving them to decode the raw Windows code.
-		hint := ""
-		primary := filepath.Join(exe, "raijin.dll")
-		if _, statErr := os.Stat(primary); statErr == nil {
-			if errno, ok := lastErr.(syscall.Errno); ok && errno == 126 {
-				hint = "\n\nraijin.dll exists but a dependency failed to load.\n" +
-					"Re-download the latest release zip and extract it so every\n" +
-					"file lands in the same directory (some archive tools split files)."
-			}
-		} else {
-			hint = "\n\nraijin.dll not found next to raijin.exe. Extract the\n" +
-				"full release zip into a single directory before running."
-		}
-		return fmt.Errorf("cannot load raijin.dll (last error: %w)\nattempted:\n%s%s",
-			lastErr, strings.Join(attempts, "\n"), hint)
-	}
-
-	dll := uintptr(handle)
-	purego.RegisterLibFunc(&raijinCreate, dll, "raijin_create")
-	purego.RegisterLibFunc(&raijinDestroy, dll, "raijin_destroy")
-	purego.RegisterLibFunc(&raijinReset, dll, "raijin_reset")
-	purego.RegisterLibFunc(&raijinLoadHex, dll, "raijin_load_hex")
-	purego.RegisterLibFunc(&raijinStep, dll, "raijin_step")
-	purego.RegisterLibFunc(&raijinHalted, dll, "raijin_halted")
-	purego.RegisterLibFunc(&raijinTohost, dll, "raijin_tohost")
-	purego.RegisterLibFunc(&raijinGetPc, dll, "raijin_get_pc")
-	purego.RegisterLibFunc(&raijinGetRegs, dll, "raijin_get_regs")
-	purego.RegisterLibFunc(&raijinGetCsrs, dll, "raijin_get_csrs")
-	purego.RegisterLibFunc(&raijinReadDmem, dll, "raijin_read_dmem")
-	purego.RegisterLibFunc(&raijinCycleCount, dll, "raijin_cycle_count")
-	purego.RegisterLibFunc(&raijinInstret, dll, "raijin_instret")
-	purego.RegisterLibFunc(&raijinGetClassCounters, dll, "raijin_get_class_counters")
-	purego.RegisterLibFunc(&raijinUartRead, dll, "raijin_uart_read")
-	purego.RegisterLibFunc(&raijinUartWrite, dll, "raijin_uart_write")
+// bindAll wires every C function the host needs to its Go function
+// pointer. The platform-specific loader calls this exactly once after a
+// successful library handle has been obtained.
+func bindAll(handle uintptr) {
+	purego.RegisterLibFunc(&raijinCreate, handle, "raijin_create")
+	purego.RegisterLibFunc(&raijinDestroy, handle, "raijin_destroy")
+	purego.RegisterLibFunc(&raijinReset, handle, "raijin_reset")
+	purego.RegisterLibFunc(&raijinLoadHex, handle, "raijin_load_hex")
+	purego.RegisterLibFunc(&raijinStep, handle, "raijin_step")
+	purego.RegisterLibFunc(&raijinHalted, handle, "raijin_halted")
+	purego.RegisterLibFunc(&raijinTohost, handle, "raijin_tohost")
+	purego.RegisterLibFunc(&raijinGetPc, handle, "raijin_get_pc")
+	purego.RegisterLibFunc(&raijinGetRegs, handle, "raijin_get_regs")
+	purego.RegisterLibFunc(&raijinGetCsrs, handle, "raijin_get_csrs")
+	purego.RegisterLibFunc(&raijinReadDmem, handle, "raijin_read_dmem")
+	purego.RegisterLibFunc(&raijinCycleCount, handle, "raijin_cycle_count")
+	purego.RegisterLibFunc(&raijinInstret, handle, "raijin_instret")
+	purego.RegisterLibFunc(&raijinGetClassCounters, handle, "raijin_get_class_counters")
+	purego.RegisterLibFunc(&raijinUartRead, handle, "raijin_uart_read")
+	purego.RegisterLibFunc(&raijinUartWrite, handle, "raijin_uart_write")
 	dllLoaded = true
-	return nil
 }
 
 func New() (*Sim, error) {
