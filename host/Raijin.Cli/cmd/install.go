@@ -3,11 +3,11 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/AinsAlmeyn/raijin-cli/internal/catalog"
+	"github.com/AinsAlmeyn/raijin-cli/internal/pathing"
 	"github.com/AinsAlmeyn/raijin-cli/internal/theme"
 	"github.com/spf13/cobra"
 )
@@ -30,7 +30,7 @@ found in the packaged payload or repo checkout. Pass `+"`--no-programs`"+` for a
 tool-only install, or `+"`--add-to-path`"+` to update the user's PATH
 immediately.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		_, binDir, progDir, err := userInstallDirs()
+		_, binDir, progDir, err := pathing.UserInstallDirs()
 		if err != nil {
 			return fmt.Errorf("cannot locate home dir: %w", err)
 		}
@@ -54,7 +54,7 @@ immediately.`,
 		for _, f := range files {
 			src := filepath.Join(srcDir, f)
 			dst := filepath.Join(binDir, f)
-			if absSameFile(src, dst) {
+			if pathing.AbsSameFile(src, dst) {
 				skipped = append(skipped, dst)
 				continue
 			}
@@ -80,7 +80,7 @@ immediately.`,
 					hexMissed = append(hexMissed, d.Name)
 					continue
 				}
-				if absSameFile(src, dst) {
+				if pathing.AbsSameFile(src, dst) {
 					// Already in place — nothing to copy.
 					hexCopied = append(hexCopied, d.Name)
 					continue
@@ -112,10 +112,10 @@ immediately.`,
 		lastMissed = hexMissed
 		destDir := binDir
 
-		userPathHasDir, pathErr := userPathContainsDir(destDir)
+		userPathHasDir, pathErr := pathing.UserPathContainsDir(destDir)
 		pathChanged := false
 		if installAddToPath {
-			pathChanged, err = updateUserPathDir(destDir, pathModeAdd)
+			pathChanged, err = pathing.UpdateUserPathDir(destDir, pathing.ModeAdd)
 			if err != nil {
 				return fmt.Errorf("update user PATH: %w", err)
 			}
@@ -184,171 +184,13 @@ immediately.`,
 		fmt.Println()
 		fmt.Println("  " + theme.Label.Render("one-time setup  (PowerShell, user PATH):"))
 		fmt.Println()
-		fmt.Println("    " + theme.Heading.Render(pathAppendPs(destDir)))
+		fmt.Println("    " + theme.Heading.Render(pathing.AppendOneLiner(destDir)))
 		fmt.Println()
 		fmt.Println("  " + theme.Mute.Render("open a fresh terminal afterwards, then:"))
 		fmt.Println("    " + theme.Heading.Render("raijin"))
 		fmt.Println()
 		return nil
 	},
-}
-
-func userInstallDirs() (root, binDir, progDir string, err error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", "", "", err
-	}
-	root = filepath.Join(home, ".raijin")
-	binDir = filepath.Join(root, "bin")
-	progDir = filepath.Join(root, "programs")
-	return root, binDir, progDir, nil
-}
-
-// pathAppendPs returns the one-liner that appends dir to the user's
-// persistent PATH. Idempotent: re-running won't duplicate the entry.
-func pathAppendPs(dir string) string {
-	quoted := psSingleQuoted(dir)
-	return `$p=[Environment]::GetEnvironmentVariable('Path','User'); ` +
-		`$d=` + quoted + `; ` +
-		`$items=@(); if ($p) { $items += ($p -split ';' | Where-Object { $_ }); } ` +
-		`if ($items -notcontains $d) { $items += $d; [Environment]::SetEnvironmentVariable('Path', ($items -join ';'), 'User') }`
-}
-
-func pathRemovePs(dir string) string {
-	quoted := psSingleQuoted(dir)
-	return `$p=[Environment]::GetEnvironmentVariable('Path','User'); ` +
-		`$d=` + quoted + `; ` +
-		`$items=@(); if ($p) { $items += ($p -split ';' | Where-Object { $_ -and $_ -ne $d }); } ` +
-		`[Environment]::SetEnvironmentVariable('Path', ($items -join ';'), 'User')`
-}
-
-// absSameFile reports whether two paths resolve to the same on-disk file.
-// Used by install to skip a pointless self-copy that would otherwise
-// truncate the destination.
-func absSameFile(a, b string) bool {
-	aa, err1 := filepath.Abs(a)
-	bb, err2 := filepath.Abs(b)
-	if err1 != nil || err2 != nil {
-		return false
-	}
-	return strings.EqualFold(filepath.Clean(aa), filepath.Clean(bb))
-}
-
-type pathMode int
-
-const (
-	pathModeAdd pathMode = iota
-	pathModeRemove
-)
-
-func userPathContainsDir(dir string) (bool, error) {
-	pathValue, err := readUserPath()
-	if err != nil {
-		return false, err
-	}
-	return pathListContainsDir(pathValue, dir), nil
-}
-
-func updateUserPathDir(dir string, mode pathMode) (bool, error) {
-	pathValue, err := readUserPath()
-	if err != nil {
-		return false, err
-	}
-
-	var next string
-	switch mode {
-	case pathModeAdd:
-		next = pathListAppendDir(pathValue, dir)
-	case pathModeRemove:
-		next = pathListRemoveDir(pathValue, dir)
-	default:
-		next = pathValue
-	}
-
-	if next == pathValue {
-		return false, nil
-	}
-	if err := writeUserPath(next); err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
-func readUserPath() (string, error) {
-	cmd := exec.Command("powershell", "-NoProfile", "-Command",
-		"[Environment]::GetEnvironmentVariable('Path','User')")
-	out, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-func writeUserPath(pathValue string) error {
-	command := "[Environment]::SetEnvironmentVariable('Path', " + psSingleQuoted(pathValue) + ", 'User')"
-	cmd := exec.Command("powershell", "-NoProfile", "-Command", command)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
-
-func psSingleQuoted(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
-}
-
-func pathListContainsDir(pathValue, dir string) bool {
-	normalizedDir := normalizeDir(dir)
-	for _, item := range pathListItems(pathValue) {
-		if normalizeDir(item) == normalizedDir {
-			return true
-		}
-	}
-	return false
-}
-
-func pathListAppendDir(pathValue, dir string) string {
-	items := pathListItems(pathValue)
-	if pathListContainsDir(pathValue, dir) {
-		return strings.Join(items, string(os.PathListSeparator))
-	}
-	items = append(items, dir)
-	return strings.Join(items, string(os.PathListSeparator))
-}
-
-func pathListRemoveDir(pathValue, dir string) string {
-	normalizedDir := normalizeDir(dir)
-	items := pathListItems(pathValue)
-	filtered := make([]string, 0, len(items))
-	for _, item := range items {
-		if normalizeDir(item) == normalizedDir {
-			continue
-		}
-		filtered = append(filtered, item)
-	}
-	return strings.Join(filtered, string(os.PathListSeparator))
-}
-
-func pathListItems(pathValue string) []string {
-	raw := filepath.SplitList(pathValue)
-	items := make([]string, 0, len(raw))
-	seen := make(map[string]struct{}, len(raw))
-	for _, item := range raw {
-		item = strings.TrimSpace(item)
-		if item == "" {
-			continue
-		}
-		normalized := normalizeDir(item)
-		if _, ok := seen[normalized]; ok {
-			continue
-		}
-		seen[normalized] = struct{}{}
-		items = append(items, item)
-	}
-	return items
-}
-
-func normalizeDir(path string) string {
-	return strings.ToLower(filepath.Clean(path))
 }
 
 // lastMissed carries the list of demos whose hex couldn't be found

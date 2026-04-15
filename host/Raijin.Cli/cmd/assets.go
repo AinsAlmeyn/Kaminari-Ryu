@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/AinsAlmeyn/raijin-cli/internal/catalog"
+	"github.com/AinsAlmeyn/raijin-cli/internal/pathing"
 )
 
 type compileSDK struct {
@@ -40,7 +41,7 @@ func packagedSDKDir() string {
 }
 
 func installedSDKDir() (string, error) {
-	root, _, _, err := userInstallDirs()
+	root, _, _, err := pathing.UserInstallDirs()
 	if err != nil {
 		return "", err
 	}

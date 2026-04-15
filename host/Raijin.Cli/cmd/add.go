@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/AinsAlmeyn/raijin-cli/internal/catalog"
+	"github.com/AinsAlmeyn/raijin-cli/internal/pathing"
 	"github.com/AinsAlmeyn/raijin-cli/internal/theme"
 	"github.com/spf13/cobra"
 )
@@ -120,7 +121,7 @@ func addProgramFromInput(inputPath string, opts addProgramOptions) (addProgramRe
 	dstHex := filepath.Join(progDir, name+".hex")
 	switch strings.ToLower(filepath.Ext(input)) {
 	case ".hex":
-		if !absSameFile(input, dstHex) {
+		if !pathing.AbsSameFile(input, dstHex) {
 			if err := copyFile(input, dstHex); err != nil {
 				return addProgramResult{}, err
 			}
@@ -276,7 +277,7 @@ func activeProgramDir() (string, error) {
 	if root := os.Getenv("RAIJIN_HOME"); strings.TrimSpace(root) != "" {
 		return filepath.Join(root, "programs"), nil
 	}
-	_, _, progDir, err := userInstallDirs()
+	_, _, progDir, err := pathing.UserInstallDirs()
 	if err != nil {
 		return "", err
 	}

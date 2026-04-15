@@ -45,10 +45,14 @@ The release zip is the end-user path. It should already contain:
 
 - `raijin.exe`
 - `raijin.dll`
+- `libgcc_s_seh-1.dll`
+- `libwinpthread-1.dll`
+- `libstdc++-6.dll`
 - `programs/` built-in demo payloads
 - `sdk/` files needed by `raijin add`
 
 In that mode, the end user does **not** need Go, Verilator, CMake, or the repo checkout.
+They also should not need to install the MSYS2/MinGW runtime separately; the release bundle must ship those DLLs next to `raijin.exe`.
 
 They only need extra tools when using specific `raijin add` paths:
 

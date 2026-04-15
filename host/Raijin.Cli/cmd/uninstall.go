@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/AinsAlmeyn/raijin-cli/internal/pathing"
 	"github.com/AinsAlmeyn/raijin-cli/internal/theme"
 	"github.com/spf13/cobra"
 )
@@ -27,7 +28,7 @@ By default it removes the CLI binaries and also removes %USERPROFILE%\\.raijin\\
 from the user's PATH. Bundled demo hex files are kept unless ` + "`--purge-programs`" + `
 is passed.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		rootDir, binDir, progDir, err := userInstallDirs()
+		rootDir, binDir, progDir, err := pathing.UserInstallDirs()
 		if err != nil {
 			return fmt.Errorf("cannot locate home dir: %w", err)
 		}
@@ -76,7 +77,7 @@ is passed.`,
 
 		pathChanged := false
 		if !uninstallKeepPath {
-			pathChanged, err = updateUserPathDir(binDir, pathModeRemove)
+			pathChanged, err = pathing.UpdateUserPathDir(binDir, pathing.ModeRemove)
 			if err != nil {
 				return fmt.Errorf("update user PATH: %w", err)
 			}
@@ -139,7 +140,7 @@ func isCurrentExecutable(path string) bool {
 	if err != nil {
 		return false
 	}
-	return absSameFile(exe, path)
+	return pathing.AbsSameFile(exe, path)
 }
 
 func fileExists(path string) bool {
@@ -210,7 +211,7 @@ func buildCleanupPowerShell(files, dirs []string) string {
 		if i > 0 {
 			builder.WriteString(",")
 		}
-		builder.WriteString(psSingleQuoted(path))
+		builder.WriteString(pathing.PsSingleQuoted(path))
 	}
 	builder.WriteString("); ")
 	builder.WriteString("$dirs=@(")
@@ -218,7 +219,7 @@ func buildCleanupPowerShell(files, dirs []string) string {
 		if i > 0 {
 			builder.WriteString(",")
 		}
-		builder.WriteString(psSingleQuoted(path))
+		builder.WriteString(pathing.PsSingleQuoted(path))
 	}
 	builder.WriteString("); ")
 	builder.WriteString("for($i=0; $i -lt 100; $i++){ $pending=$false; foreach($f in $files){ if(Test-Path -LiteralPath $f){ try { Remove-Item -LiteralPath $f -Force -ErrorAction Stop } catch { $pending=$true } } }; if(-not $pending){ break }; Start-Sleep -Milliseconds 200 }; ")

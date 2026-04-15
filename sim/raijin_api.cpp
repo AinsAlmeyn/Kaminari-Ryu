@@ -30,6 +30,25 @@
 // when we drive time via VerilatedContext. A trivial stub satisfies the link.
 double sc_time_stamp() { return 0; }
 
+// On UCRT64, libstdc++'s thread/sleep glue references nanosleep64. The static
+// libwinpthread.a doesn't export it (only the DLL does), which would force a
+// libwinpthread-1.dll runtime dependency for one symbol. Provide our own
+// stub so the linker resolves it locally and the DLL drops out entirely.
+// We don't use sleep_for in our hot path; if anyone ever does, mapping to
+// Win32 Sleep() with millisecond granularity is good enough.
+#if defined(_WIN32)
+#include <windows.h>
+#include <sys/types.h>
+extern "C" int nanosleep64(const struct _timespec64* req,
+                           struct _timespec64* rem) {
+    if (!req) return -1;
+    DWORD ms = static_cast<DWORD>(req->tv_sec * 1000 + req->tv_nsec / 1000000);
+    Sleep(ms);
+    if (rem) { rem->tv_sec = 0; rem->tv_nsec = 0; }
+    return 0;
+}
+#endif
+
 // Implemented in dpi_hooks.cpp.
 extern "C" int  raijin_dpi_uart_drain(char* buf, int max);
 extern "C" void raijin_dpi_uart_push(unsigned char c);

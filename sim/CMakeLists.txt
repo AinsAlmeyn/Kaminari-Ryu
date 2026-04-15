@@ -16,14 +16,34 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 # /ucrt64/bin instead by pre-seeding the VERILATOR_BIN cache var.
 # ----------------------------------------------------------------------------
 if(WIN32 AND NOT VERILATOR_BIN)
-    find_program(VERILATOR_BIN
+    find_program(_RAIJIN_VERILATOR_BIN
         NAMES verilator_bin.exe verilator_bin
         PATHS /ucrt64/bin /mingw64/bin C:/msys64/ucrt64/bin C:/msys64/mingw64/bin
         NO_DEFAULT_PATH
     )
+    if(_RAIJIN_VERILATOR_BIN)
+        set(VERILATOR_BIN "${_RAIJIN_VERILATOR_BIN}" CACHE FILEPATH
+            "Path to the real Verilator binary" FORCE)
+    endif()
 endif()
 
 find_package(verilator HINTS $ENV{VERILATOR_ROOT} REQUIRED)
+
+# ----------------------------------------------------------------------------
+# Static winpthread on Windows.
+#
+# verilate() pulls VERILATOR_MT_CFLAGS onto the target (verilator-config.cmake
+# probes -pthread/-lpthread/-latomic and accumulates whatever the compiler
+# accepts). On UCRT64 that resolves to dynamic libwinpthread.dll.a, which
+# re-introduces the runtime DLL we are trying to eliminate.
+#
+# Override after find_package(verilator): swap the dynamic pthread for a
+# -Bstatic libwinpthread sandwich. The closing -Bdynamic restores dynamic
+# linking for the system libs (kernel32, advapi32, ...) appended after.
+# ----------------------------------------------------------------------------
+if(WIN32)
+    set(VERILATOR_MT_CFLAGS "-Wl,-Bstatic" "-lwinpthread" "-latomic" "-Wl,-Bdynamic")
+endif()
 
 set(RTL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../raijin/rtl")
 
@@ -115,6 +135,24 @@ target_compile_options(raijin PRIVATE
 target_link_options(raijin PRIVATE
     -Wl,--gc-sections -Wl,-O1 -flto=auto
 )
+
+# On Windows, statically link the GCC runtime so raijin.dll has zero
+# external MinGW dependencies. The released zip then ships only
+# raijin.exe + raijin.dll + programs/ + sdk/, no libstdc++-6 / libgcc_s /
+# libwinpthread companion DLLs to forget. The static winpthread piece is
+# done via the VERILATOR_MT_CFLAGS override above, since verilate() owns
+# the pthread link.
+if(WIN32)
+    # --as-needed prevents the gcc driver's spec-appended -lpthread (dynamic
+    # libwinpthread.dll.a) from leaving an unused IDATA entry in the DLL.
+    # Without it raijin.dll keeps a libwinpthread-1.dll dependency even
+    # though every pthread symbol was already resolved statically above.
+    target_link_options(raijin PRIVATE
+        -static-libgcc
+        -static-libstdc++
+        -Wl,--as-needed
+    )
+endif()
 
 # Keep build artifacts in a tidy bin/ subdir so C# projects can copy from
 # one known location regardless of platform.

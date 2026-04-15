@@ -1,69 +1,194 @@
 name: Release Raijin CLI
 
 on:
-	workflow_dispatch:
-	push:
-		tags:
-			- "raijin-cli-v*"
+  workflow_dispatch:
+  push:
+    tags:
+      - "raijin-cli-v*"
 
 permissions:
-	contents: write
+  contents: write
 
 jobs:
-	build-windows-cli:
-		runs-on: windows-latest
+  build-windows-cli:
+    runs-on: windows-latest
 
-		steps:
-			- name: Checkout
-				uses: actions/checkout@v4
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
 
-			- name: Setup Go
-				uses: actions/setup-go@v5
-				with:
-					go-version-file: host/Raijin.Cli/go.mod
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: host/Raijin.Cli/go.mod
 
-			- name: Setup MSYS2 toolchain
-				uses: msys2/setup-msys2@v2
-				with:
-					msystem: UCRT64
-					update: true
-					install: >-
-						git
-						mingw-w64-ucrt-x86_64-gcc
-						mingw-w64-ucrt-x86_64-cmake
-						mingw-w64-ucrt-x86_64-ninja
-						mingw-w64-ucrt-x86_64-verilator
+      - name: Setup MSYS2 toolchain
+        id: msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-verilator
 
-			- name: Build simulator DLL
-				shell: msys2 {0}
-				run: |
-					cmake -S sim -B build/sim -G Ninja
-					cmake --build build/sim --config Release
+      - name: Build simulator DLL
+        shell: msys2 {0}
+        run: |
+          cmake -S sim -B build/sim -G Ninja -DVERILATOR_ROOT=/ucrt64/share/verilator -DVERILATOR_BIN=/ucrt64/bin/verilator_bin.exe
+          cmake --build build/sim --config Release
 
-			- name: Package CLI bundle
-				shell: bash
-				working-directory: host/Raijin.Cli
-				run: |
-					chmod +x ./build.sh
-					./build.sh
+      - name: Package CLI bundle
+        shell: bash
+        working-directory: host/Raijin.Cli
+        run: |
+          chmod +x ./build.sh
+          ./build.sh
 
-			- name: Assemble release directory
-				shell: pwsh
-				run: |
-					$bundleDir = "dist/raijin-cli-windows-x64"
-					Remove-Item $bundleDir -Recurse -Force -ErrorAction SilentlyContinue
-					New-Item -ItemType Directory -Path $bundleDir | Out-Null
-					Copy-Item "host/Raijin.Cli/bin/*" $bundleDir -Recurse -Force
-					Compress-Archive -Path "$bundleDir/*" -DestinationPath "dist/raijin-cli-windows-x64.zip" -Force
+      - name: Stage release artifacts
+        shell: pwsh
+        run: |
+          # build.sh already produced the zip and the installer in
+          # host/Raijin.Cli/bin/. Move both into dist/ so subsequent steps
+          # have one canonical path.
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item "host/Raijin.Cli/bin/raijin-cli-windows-x64.zip" "dist/raijin-cli-windows-x64.zip" -Force
+          Copy-Item "host/Raijin.Cli/bin/raijin-setup.exe"           "dist/raijin-setup.exe"           -Force
+          Get-ChildItem dist | Format-Table Name, Length
 
-			- name: Upload artifact
-				uses: actions/upload-artifact@v4
-				with:
-					name: raijin-cli-windows-x64
-					path: dist/raijin-cli-windows-x64.zip
+      - name: Smoke test portable zip
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $smokeDir = "dist/smoke-zip"
+          Remove-Item $smokeDir -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $smokeDir | Out-Null
+          Expand-Archive -Path "dist/raijin-cli-windows-x64.zip" -DestinationPath $smokeDir -Force
 
-			- name: Publish GitHub release asset
-				if: startsWith(github.ref, 'refs/tags/')
-				uses: softprops/action-gh-release@v2
-				with:
-					files: dist/raijin-cli-windows-x64.zip
+          $exe = Join-Path $smokeDir "raijin.exe"
+          $dll = Join-Path $smokeDir "raijin.dll"
+          if (-not (Test-Path $exe)) { throw "smoke: raijin.exe missing from zip" }
+          if (-not (Test-Path $dll)) { throw "smoke: raijin.dll missing from zip" }
+
+          & $exe --version
+          if ($LASTEXITCODE -ne 0) { throw "smoke: --version exit $LASTEXITCODE" }
+
+          # PowerShell 7 doesn't accept `< $null` (reserved operator). Pipe an
+          # empty $null into the process to feed an immediate-EOF stdin instead;
+          # --max-cycles handles termination.
+          #
+          # Exit codes (runner.go): 0 = halted+tohost=1, 1 = STOPPED via cycle
+          # cap (matrix is an infinite animation, never halts), 2 = setup error
+          # (DLL load fail, hex load fail). Accept 0 or 1; treat >=2 as failure.
+          $matrixOut = $null | & $exe run matrix --max-cycles 10000 --quiet --no-status-bar 2>&1
+          $matrixExit = $LASTEXITCODE
+          Write-Host $matrixOut
+          $matrixJoined = ($matrixOut | Out-String)
+          if ($matrixExit -ge 2) { throw "smoke: run matrix exit $matrixExit  DLL likely failed to load" }
+          if ($matrixJoined -notmatch "Summary") { throw "smoke: run matrix produced no Summary  sim did not run" }
+
+          $msys2Root = "${{ steps.msys2.outputs.msys2-location }}"
+          $objdump = Join-Path $msys2Root "ucrt64/bin/objdump.exe"
+          if (Test-Path $objdump) {
+              $deps = & $objdump -p $dll | Select-String "DLL Name:"
+              Write-Host "raijin.dll dependencies:"
+              $deps | ForEach-Object { Write-Host "  $_" }
+              $bad = $deps | Where-Object { $_ -match "libstdc\+\+|libgcc_s|libwinpthread" }
+              if ($bad) { throw "smoke: raijin.dll still depends on MinGW runtime DLLs: $bad" }
+          }
+
+      - name: Smoke test single-file installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $setup = "dist/raijin-setup.exe"
+          if (-not (Test-Path $setup)) { throw "smoke: raijin-setup.exe missing" }
+
+          # --version exercises the binary without touching disk.
+          & $setup --version
+          if ($LASTEXITCODE -ne 0) { throw "smoke: setup --version exit $LASTEXITCODE" }
+
+          # --silent --no-path performs the real install (extract the embedded
+          # zip into %USERPROFILE%\.raijin) without touching the runner's user
+          # PATH (which would persist across jobs and is not what we are
+          # validating). The PATH update logic is exercised separately by the
+          # `raijin install` command's own tests.
+          & $setup --silent --no-path
+          if ($LASTEXITCODE -ne 0) { throw "smoke: setup --silent exit $LASTEXITCODE" }
+
+          $installedExe = Join-Path $env:USERPROFILE ".raijin/bin/raijin.exe"
+          $installedDll = Join-Path $env:USERPROFILE ".raijin/bin/raijin.dll"
+          if (-not (Test-Path $installedExe)) { throw "smoke: installed raijin.exe missing at $installedExe" }
+          if (-not (Test-Path $installedDll)) { throw "smoke: installed raijin.dll missing at $installedDll" }
+
+          # Real proof the install works: the installed copy actually runs.
+          & $installedExe --version
+          if ($LASTEXITCODE -ne 0) { throw "smoke: installed --version exit $LASTEXITCODE" }
+
+          $matrixOut = $null | & $installedExe run matrix --max-cycles 10000 --quiet --no-status-bar 2>&1
+          $matrixExit = $LASTEXITCODE
+          Write-Host $matrixOut
+          $matrixJoined = ($matrixOut | Out-String)
+          if ($matrixExit -ge 2) { throw "smoke: installed run matrix exit $matrixExit" }
+          if ($matrixJoined -notmatch "Summary") { throw "smoke: installed run matrix produced no Summary" }
+
+          # Cleanup: the runner is shared across builds; we don't want our
+          # install lingering. uninstall via the installed copy itself; the
+          # scheduled-cleanup helper finishes after the process exits.
+          & $installedExe uninstall --keep-path --purge-programs
+          if ($LASTEXITCODE -ne 0) { Write-Host "smoke: uninstall exit $LASTEXITCODE (continuing; runner is ephemeral anyway)" }
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: raijin-cli-windows-x64
+          path: |
+            dist/raijin-cli-windows-x64.zip
+            dist/raijin-setup.exe
+
+      - name: Publish GitHub release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/raijin-cli-windows-x64.zip
+            dist/raijin-setup.exe
+          body: |
+            ## Raijin CLI  Windows x64
+
+            Two ways to install:
+
+            ### Easy: single-file installer
+
+            Download `raijin-setup.exe`, double-click it, follow the on-screen
+            flow. Files land in `%USERPROFILE%\.raijin\` and the installer
+            offers to add the bin directory to your user PATH so `raijin`
+            works from any terminal. You can delete `raijin-setup.exe`
+            afterwards.
+
+            ### Portable: zip bundle
+
+            Download `raijin-cli-windows-x64.zip`, extract anywhere, run
+            `.\raijin.exe` in place. No PATH changes, no install.
+
+            ```
+            raijin.exe --help
+            raijin.exe run matrix
+            raijin.exe run doom
+            ```
+
+            ### What's in the bundle
+            - `raijin.exe`   Go CLI host
+            - `raijin.dll`   Verilated RV32IM core (GCC runtime statically linked)
+            - `programs/`    built-in demos: matrix, snake, donut, doom
+            - `sdk/`         C runtime + elf2hex.py to compile your own programs
+
+            ### Troubleshooting
+            If `raijin.exe` reports "cannot load raijin.dll", make sure
+            `raijin.exe` and `raijin.dll` end up in the same directory
+            after extraction. The installer handles this for you.
