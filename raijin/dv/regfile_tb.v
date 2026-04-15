@@ -11,6 +11,7 @@ module regfile_tb;
 
     // -------- Signals driven into the DUT (Device Under Test) ------------
     reg         clk;
+    reg         reset;
     reg         write_enable;
     reg  [4:0]  read_addr1;
     reg  [4:0]  read_addr2;
@@ -26,6 +27,7 @@ module regfile_tb;
     // -------- Instantiate the DUT ---------------------------------------
     regfile dut (
         .clk          (clk),
+        .reset        (reset),
         .write_enable (write_enable),
         .read_addr1   (read_addr1),
         .read_addr2   (read_addr2),
@@ -82,12 +84,13 @@ module regfile_tb;
         $display("================================================");
 
         // Initialise all inputs
+        reset        = 1;
         write_enable = 0;
         read_addr1   = 0;
         read_addr2   = 0;
         write_addr   = 0;
         write_data   = 0;
-        #2;
+        #12; reset = 0; #2;
 
         // ----------------------------------------------------------------
         // Test 1 : write x5 = 0xDEADBEEF, then read it back

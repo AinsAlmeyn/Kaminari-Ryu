@@ -95,14 +95,29 @@
 `define FUNCT3_AND                      3'b111  // AND
 
 // ============================================================
-// FUNCT7. Only two distinct values ever appear in RV32I.
-// The meaningful bit is bit 30 of the instruction:
+// FUNCT7. Three distinct values appear in RV32I + RV32M.
+// The meaningful bit-30 of the instruction:
 //   0 → "normal" operation  (ADD, SRL, SRLI)
 //   1 → "alternate" variant (SUB, SRA, SRAI)
-// The other 6 bits must be zero in RV32I.
+// And bit-25 = 1 with bit-30 = 0 marks the M extension family.
 // ============================================================
 `define FUNCT7_DEFAULT             7'b0000000  // ADD, SRL, SRLI, and most R-type ops
 `define FUNCT7_SUBTRACT_OR_SHIFT_ARITHMETIC  7'b0100000  // SUB, SRA, SRAI
+`define FUNCT7_M_EXTENSION         7'b0000001  // MUL/MULH/MULHSU/MULHU/DIV/DIVU/REM/REMU
+
+// ============================================================
+// FUNCT3 for the M extension (opcode = OPCODE_ARITH_REGISTER,
+// funct7 = FUNCT7_M_EXTENSION). Same R-type encoding as ADD/SUB
+// etc., disambiguated by funct7.
+// ============================================================
+`define FUNCT3_MUL              3'b000   // MUL    : low  32 bits of (signed   x signed)
+`define FUNCT3_MULH             3'b001   // MULH   : high 32 bits of (signed   x signed)
+`define FUNCT3_MULHSU           3'b010   // MULHSU : high 32 bits of (signed   x unsigned)
+`define FUNCT3_MULHU            3'b011   // MULHU  : high 32 bits of (unsigned x unsigned)
+`define FUNCT3_DIV              3'b100   // DIV    : signed   division
+`define FUNCT3_DIVU             3'b101   // DIVU   : unsigned division
+`define FUNCT3_REM              3'b110   // REM    : signed   remainder
+`define FUNCT3_REMU             3'b111   // REMU   : unsigned remainder
 
 // ============================================================
 // FUNCT3 for SYSTEM opcode (= OPCODE_SYSTEM_CALL)
@@ -139,6 +154,20 @@
 `define CSR_MTVAL      12'h343
 `define CSR_MIP        12'h344
 `define CSR_MHARTID    12'hF14
+
+// Performance counters. Single-cycle core, so minstret tracks cycles 1:1
+// (subtract traps if exact retirement count matters). User-mode aliases
+// cycle/time/instret read the same backing flops (RO).
+`define CSR_MCYCLE     12'hB00
+`define CSR_MCYCLEH    12'hB80
+`define CSR_MINSTRET   12'hB02
+`define CSR_MINSTRETH  12'hB82
+`define CSR_CYCLE      12'hC00
+`define CSR_CYCLEH     12'hC80
+`define CSR_TIME       12'hC01
+`define CSR_TIMEH      12'hC81
+`define CSR_INSTRET    12'hC02
+`define CSR_INSTRETH   12'hC82
 
 // ============================================================
 // Exception cause codes (written into mcause on a synchronous trap).

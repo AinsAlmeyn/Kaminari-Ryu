@@ -12,6 +12,7 @@
 
 module regfile (
     input  wire        clk,          // clock. Writes happen on its rising edge
+    input  wire        reset,        // active high, synchronous: zeros x1..x31
     input  wire        write_enable, // 1 = perform a write this cycle, 0 = no write
 
     input  wire [4:0]  read_addr1,   // which register to read on port 1 (rs1)
@@ -29,7 +30,7 @@ module regfile (
     // `reg` here is the Verilog keyword for "stateful storage", not
     // "register" in the architectural sense. Confusing but standard.
     // ----------------------------------------------------------------
-    reg [31:0] registers [0:31];
+    reg [31:0] registers [0:31] /* verilator public_flat_rd */;
 
     // ----------------------------------------------------------------
     // Read ports. Combinational (asynchronous).
@@ -42,9 +43,16 @@ module regfile (
     // ----------------------------------------------------------------
     // Write port. Synchronous, rising-edge triggered.
     // Writes to x0 are ignored: the spec requires x0 to stay zero.
+    // On reset, x1..x31 are forced to 0 so a fresh program never observes
+    // residual values from the previous run. (The RV32I spec leaves these
+    // undefined at reset, but a deterministic boot is friendlier here.)
     // ----------------------------------------------------------------
+    integer _i_rst;
     always @(posedge clk) begin
-        if (write_enable && (write_addr != 5'd0)) begin
+        if (reset) begin
+            for (_i_rst = 0; _i_rst < 32; _i_rst = _i_rst + 1)
+                registers[_i_rst] <= 32'b0;
+        end else if (write_enable && (write_addr != 5'd0)) begin
             registers[write_addr] <= write_data;
         end
     end

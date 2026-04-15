@@ -34,7 +34,7 @@ module dmem #(
     output reg  [31:0] read_data
 );
 
-    reg [31:0] mem [0:DEPTH_WORDS-1];
+    reg [31:0] mem [0:DEPTH_WORDS-1] /* verilator public_flat_rw */;
     integer _i_init;
 
     wire [29:0] word_index = addr[31:2];

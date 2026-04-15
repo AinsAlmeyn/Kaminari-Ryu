@@ -27,6 +27,7 @@ from pathlib import Path
 REPO_ROOT        = Path(__file__).resolve().parent.parent.parent
 TESTS_ROOT       = REPO_ROOT / 'tools' / 'riscv-tests'
 ISA_RV32UI       = TESTS_ROOT / 'isa' / 'rv32ui'
+ISA_RV32UM       = TESTS_ROOT / 'isa' / 'rv32um'
 ENV_P            = TESTS_ROOT / 'env' / 'p'
 MACROS_SCALAR    = TESTS_ROOT / 'isa' / 'macros' / 'scalar'
 LINKER_SCRIPT    = REPO_ROOT / 'tools' / 'isa-runtime' / 'link.ld'
@@ -35,8 +36,12 @@ TB_FILE          = REPO_ROOT / 'raijin' / 'dv' / 'riscv_test_tb.v'
 RTL_FILES = [
     'regfile.v', 'decoder.v', 'control.v', 'alu.v',
     'branch_unit.v', 'pc_reg.v', 'imem.v', 'dmem.v',
-    'csr_file.v', 'uart_sim.v', 'raijin_core.v',
+    'csr_file.v', 'uart_sim.v', 'm_unit.v', 'raijin_core.v',
 ]
+
+# Map test name -> (source dir, gcc -march flag).
+RV32UI_TESTS = {p.stem: (ISA_RV32UI, 'rv32i_zicsr')  for p in ISA_RV32UI.glob('*.S')}
+RV32UM_TESTS = {p.stem: (ISA_RV32UM, 'rv32im_zicsr') for p in ISA_RV32UM.glob('*.S')} if ISA_RV32UM.exists() else {}
 
 
 # Tests that cannot pass on our core (need features we haven't built).
@@ -59,16 +64,24 @@ class Result:
 
 
 def list_tests() -> list[str]:
-    return sorted(p.stem for p in ISA_RV32UI.glob('*.S'))
+    return sorted({*RV32UI_TESTS.keys(), *RV32UM_TESTS.keys()})
+
+
+def _resolve_test(test_name: str) -> tuple[Path, str]:
+    if test_name in RV32UM_TESTS:
+        src_dir, march = RV32UM_TESTS[test_name]
+    else:
+        src_dir, march = RV32UI_TESTS.get(test_name, (ISA_RV32UI, 'rv32i_zicsr'))
+    return src_dir / f'{test_name}.S', march
 
 
 def build_elf(test_name: str) -> Path:
-    src = ISA_RV32UI / f'{test_name}.S'
+    src, march = _resolve_test(test_name)
     elf = BUILD_DIR / f'{test_name}.elf'
     BUILD_DIR.mkdir(parents=True, exist_ok=True)
     cmd = [
         'riscv-none-elf-gcc',
-        '-march=rv32i_zicsr', '-mabi=ilp32', '-mcmodel=medany',
+        f'-march={march}', '-mabi=ilp32', '-mcmodel=medany',
         '-nostdlib', '-nostartfiles', '-static',
         '-T', str(LINKER_SCRIPT),
         '-I', str(ENV_P),
@@ -126,7 +139,7 @@ def simulate(hex_path: Path, test_name: str) -> Result:
 def run_one(test_name: str) -> Result:
     if test_name in SKIP_LIST:
         return Result(test_name, 'SKIP', 'in SKIP_LIST')
-    src = ISA_RV32UI / f'{test_name}.S'
+    src, _ = _resolve_test(test_name)
     if not src.exists():
         return Result(test_name, 'BUILD_ERROR', f'no source: {src}')
     try:
@@ -151,9 +164,10 @@ def format_result(r: Result) -> str:
         'SKIP': '[SKIP]',
     }[r.status]
     cyc = f' {r.cycles:>7} cyc' if r.cycles is not None else ' ' * 12
-    name = f'rv32ui-p-{r.name}'
+    prefix = 'rv32um-p' if r.name in RV32UM_TESTS else 'rv32ui-p'
+    name = f'{prefix}-{r.name}'
     extra = r.detail if r.status in ('FAIL', 'TIMEOUT', 'BUILD_ERROR') else ''
-    return f'  {marker}  {name:<24}{cyc}  {extra}'
+    return f'  {marker}  {name:<26}{cyc}  {extra}'
 
 
 def main(argv: list[str]) -> int:

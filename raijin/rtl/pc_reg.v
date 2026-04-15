@@ -14,7 +14,7 @@ module pc_reg (
     input  wire        clk,
     input  wire        reset,        // active high, synchronous
     input  wire [31:0] next_pc,
-    output reg  [31:0] pc
+    output reg  [31:0] pc /* verilator public_flat_rd */
 );
 
     always @(posedge clk) begin

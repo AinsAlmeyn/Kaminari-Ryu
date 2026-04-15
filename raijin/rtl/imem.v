@@ -18,7 +18,7 @@ module imem #(
     output wire [31:0] instruction
 );
 
-    reg [31:0] mem [0:DEPTH_WORDS-1];
+    reg [31:0] mem [0:DEPTH_WORDS-1] /* verilator public_flat_rw */;
     integer _i_init;
 
     initial begin

@@ -54,7 +54,13 @@ module control (
     // Raised for the privileged forms of SYSTEM (funct3 = 000). The core
     // disambiguates ECALL / EBREAK / MRET by looking at inst[31:20]
     // directly, so we only expose a single "is this a priv op" signal.
-    output reg        is_system_priv
+    output reg        is_system_priv,
+
+    // Raised for any RV32M instruction (R-type with funct7 = 7'b0000001).
+    // The core uses this to route m_unit's result into the writeback mux,
+    // bypassing the ALU. wb_src_sel is left at WB_SRC_ALU since we override
+    // at the top level.
+    output reg        is_m_op
 );
 
     // ====================================================================
@@ -78,16 +84,22 @@ module control (
         csr_op         = `CSR_OP_WRITE;
         csr_src_sel    = `CSR_SRC_REG;
         is_system_priv = 1'b0;
+        is_m_op        = 1'b0;
 
         case (opcode)
             // ----------------------------------------------------------------
             // R-type :  rd = rs1 OP rs2
+            // funct7 == 7'b0000001 selects the M extension (mul/div family).
+            // We still drive reg_write_en = 1 and let the top-level swap in
+            // m_unit's result over the ALU's result via the is_m_op signal.
             // ----------------------------------------------------------------
             `OPCODE_ARITH_REGISTER : begin
                 reg_write_en  = 1'b1;
                 alu_src_a_sel = `ALU_SRC_A_REG;
                 alu_src_b_sel = `ALU_SRC_B_REG;
                 wb_src_sel    = `WB_SRC_ALU;
+                if (funct7 == `FUNCT7_M_EXTENSION)
+                    is_m_op   = 1'b1;
             end
 
             // ----------------------------------------------------------------

@@ -66,6 +66,10 @@ module csr_file (
     reg [31:0] mscratch;
     reg [31:0] mtval;
 
+    // Free-running 64-bit cycle counter. Backs mcycle/mcycleh + cycle/cycleh
+    // aliases, and (because single-cycle) doubles as minstret.
+    reg [63:0] mcycle_ctr /* verilator public_flat_rd */;
+
     // --------------------------------------------------------------------
     // Read port. Combinational mux over csr_addr.
     // Any CSR we don't implement returns zero (WARL legal).
@@ -83,6 +87,16 @@ module csr_file (
             `CSR_MCAUSE   : rdata_mux = mcause;
             `CSR_MSCRATCH : rdata_mux = mscratch;
             `CSR_MTVAL    : rdata_mux = mtval;
+            `CSR_MCYCLE,
+            `CSR_MINSTRET,
+            `CSR_CYCLE,
+            `CSR_TIME,
+            `CSR_INSTRET    : rdata_mux = mcycle_ctr[31:0];
+            `CSR_MCYCLEH,
+            `CSR_MINSTRETH,
+            `CSR_CYCLEH,
+            `CSR_TIMEH,
+            `CSR_INSTRETH   : rdata_mux = mcycle_ctr[63:32];
             default       : rdata_mux = 32'b0;     // all others RAZ
         endcase
     end
@@ -141,6 +155,24 @@ module csr_file (
                 `CSR_MTVAL    : mtval    <= sw_next_value;
                 default       : /* writes to unimplemented CSRs are ignored */ ;
             endcase
+        end
+    end
+
+    // Free-running 64-bit cycle counter. Isolated block so its NBA is the
+    // sole writer except when software writes mcycle/minstret (RO aliases
+    // ignore writes). Reset clears it; software writes to the low/high
+    // halves take priority over the +1 increment for that cycle.
+    wire sw_cycle_wr_lo = sw_commit & ((csr_addr == `CSR_MCYCLE)   | (csr_addr == `CSR_MINSTRET));
+    wire sw_cycle_wr_hi = sw_commit & ((csr_addr == `CSR_MCYCLEH)  | (csr_addr == `CSR_MINSTRETH));
+    always @(posedge clk) begin
+        if (reset) begin
+            mcycle_ctr <= 64'd0;
+        end else begin
+            if (sw_cycle_wr_lo)       mcycle_ctr[31:0]  <= sw_next_value;
+            else                      mcycle_ctr[31:0]  <= mcycle_ctr[31:0] + 32'd1;
+            if (sw_cycle_wr_hi)       mcycle_ctr[63:32] <= sw_next_value;
+            else if (&mcycle_ctr[31:0] && !sw_cycle_wr_lo)
+                                      mcycle_ctr[63:32] <= mcycle_ctr[63:32] + 32'd1;
         end
     end
 

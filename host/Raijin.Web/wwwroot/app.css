@@ -1,0 +1,415 @@
+/* ============================================================
+   Raijin: monochrome dashboard, terminal-first, full viewport.
+   Pure black + soft greys, no chrome wasted on a header.
+   ============================================================ */
+
+:root {
+    /* Background depths: pure black at the bottom, slight lift for cards.
+       Avoids the harsh look of #000 + #fff by using nuanced greys. */
+    --bg-0:        #000000;
+    --bg-1:        #0a0a0c;
+    --bg-2:        #111114;
+    --bg-3:        #16161a;
+    --bg-input:    #1c1c20;
+
+    /* Borders, in three intensities. */
+    --line-1:      #1d1d22;
+    --line-2:      #25252b;
+    --line-3:      #2f2f36;
+
+    /* Foreground. */
+    --fg-0:        #f3f3f4;   /* primary text */
+    --fg-1:        #c9c9cd;   /* secondary text */
+    --fg-2:        #8e8e95;   /* labels */
+    --fg-3:        #5e5e65;   /* mute / placeholders */
+    --fg-4:        #3a3a40;   /* faint */
+
+    --accent:      #ffffff;   /* used sparingly: primary CTA + key emphasis */
+
+    --font-ui:     "Inter", -apple-system, "Segoe UI", system-ui, sans-serif;
+    --font-mono:   "JetBrains Mono", "Cascadia Mono", "SFMono-Regular",
+                   Menlo, Consolas, monospace;
+
+    --radius:      8px;
+    --radius-sm:   5px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+    margin: 0; padding: 0;
+    background: var(--bg-0);
+    color: var(--fg-0);
+    font-family: var(--font-ui);
+    font-size: 14px;
+    height: 100%;
+    overflow: hidden;             /* viewport-pinned layout */
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+}
+
+button, input, select { font-family: inherit; }
+
+::selection { background: rgba(255,255,255,0.18); color: #fff; }
+
+/* ──────────────── Page shell ──────────────── */
+.page {
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+/* ──────────────── Workspace ──────────────── */
+.workspace {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 14px 16px 16px;
+    max-width: 1300px;
+    width: 100%;
+    margin: 0 auto;
+}
+
+/* ──────────────── Terminal section ──────────────── */
+.terminal-section {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 0;
+}
+
+.terminal-frame {
+    flex: 1;
+    min-height: 0;
+    background: var(--bg-1);
+    border: 1px solid var(--line-2);
+    border-radius: var(--radius);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    box-shadow:
+        0 1px 0 rgba(255,255,255,0.02) inset,
+        0 12px 30px rgba(0,0,0,0.45);
+}
+
+/* Title bar styled like a real terminal window. */
+.terminal-titlebar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 14px;
+    background: linear-gradient(to bottom, #181820, #131318);
+    border-bottom: 1px solid var(--line-2);
+    user-select: none;
+}
+
+.tt-dots { display: inline-flex; gap: 6px; }
+.tt-dot {
+    width: 11px; height: 11px;
+    border-radius: 50%;
+    background: var(--line-3);
+    border: 1px solid rgba(0,0,0,0.4);
+}
+.tt-dot.d1 { background: #3a3a40; }
+.tt-dot.d2 { background: #3a3a40; }
+.tt-dot.d3 { background: #3a3a40; }
+
+.tt-name {
+    margin-left: 10px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--fg-1);
+    letter-spacing: 0.02em;
+}
+.tt-spacer { flex: 1; }
+.tt-meta {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fg-3);
+    letter-spacing: 0.06em;
+    text-transform: lowercase;
+}
+
+/* The xterm.js host fills all remaining space inside the frame. */
+.terminal-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    background: var(--bg-0);
+}
+.terminal-host {
+    flex: 1;
+    min-height: 0;
+    background: var(--bg-0);
+    padding: 8px 6px 6px 10px;
+    overflow: hidden;            /* xterm scrolls inside */
+}
+
+/* xterm overrides for a cohesive look. */
+.xterm-viewport { background: var(--bg-0) !important; }
+.xterm-viewport::-webkit-scrollbar      { width: 10px; }
+.xterm-viewport::-webkit-scrollbar-track { background: transparent; }
+.xterm-viewport::-webkit-scrollbar-thumb {
+    background: #2a2a30;
+    border-radius: 5px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+}
+.xterm-viewport::-webkit-scrollbar-thumb:hover {
+    background: #3c3c44;
+    background-clip: content-box;
+    border: 2px solid transparent;
+}
+
+/* ──────────────── Controls bar ──────────────── */
+.controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+.ctl {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-2);
+    color: var(--fg-0);
+    border: 1px solid var(--line-2);
+    border-radius: var(--radius-sm);
+    padding: 8px 16px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: border-color 120ms ease, background 120ms ease, transform 60ms ease;
+    user-select: none;
+    line-height: 1;
+    min-width: 86px;
+}
+.ctl:hover:not([disabled])  { border-color: var(--line-3); background: var(--bg-3); }
+.ctl:active:not([disabled]) { transform: translateY(1px); }
+.ctl:disabled               { opacity: 0.32; cursor: not-allowed; }
+.ctl.primary {
+    background: var(--accent);
+    color: #000;
+    border-color: var(--accent);
+    font-weight: 600;
+}
+.ctl.primary:hover:not([disabled]) {
+    background: #fff;
+    border-color: #fff;
+}
+
+.ctl-load { position: relative; overflow: hidden; }
+.ctl-load input[type="file"] {
+    position: absolute; inset: 0;
+    opacity: 0;
+    cursor: pointer;
+    width: 100%; height: 100%;
+}
+
+.ctl-error {
+    margin-left: 8px;
+    color: var(--fg-0);
+    background: #2a1414;
+    border: 1px solid #4a1f1f;
+    padding: 4px 10px;
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    font-size: 12px;
+}
+
+/* ──────────────── Stats bar (below the terminal) ──────────────── */
+.stats-bar {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    background: var(--bg-2);
+    border: 1px solid var(--line-2);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+}
+
+.sys-mute  { color: var(--fg-3); font-size: 11px; }
+.sys-mono  { font-family: var(--font-mono); color: var(--fg-1); }
+.sep       { color: var(--fg-4); margin: 0 6px; }
+.unit      { font-size: 12px; color: var(--fg-2); margin-left: 6px; font-weight: 400; }
+.dim       { color: var(--fg-3); font-weight: 400; }
+
+/* Top row: 4 metric cards */
+.stats-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 10px;
+}
+.stat-card {
+    background: var(--bg-1);
+    border: 1px solid var(--line-1);
+    border-radius: var(--radius-sm);
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+.stat-label {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: var(--fg-3);
+}
+.stat-value {
+    font-family: var(--font-mono);
+    font-size: 22px;
+    font-weight: 500;
+    color: var(--fg-0);
+    letter-spacing: -0.005em;
+    line-height: 1.15;
+    margin-top: 2px;
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+}
+.stat-sub {
+    margin-top: auto;
+    padding-top: 6px;
+    font-size: 11px;
+    color: var(--fg-3);
+}
+.stat-sub .sys-mono { font-size: 11px; color: var(--fg-1); }
+
+/* State pill */
+.state-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 12px 4px 10px;
+    border: 1px solid var(--line-3);
+    border-radius: 999px;
+    font-size: 13px;
+    font-family: var(--font-mono);
+    color: var(--fg-0);
+    background: var(--bg-3);
+}
+.state-pill .dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--fg-3);
+}
+.state-running .dot {
+    background: var(--fg-0);
+    animation: pulse 1.6s ease-in-out infinite;
+}
+.state-halted .dot { background: var(--fg-2); }
+.state-ready  .dot { background: var(--fg-2); }
+.state-idle   .dot { background: var(--fg-3); }
+
+@keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(255,255,255,0.45); }
+    50%      { box-shadow: 0 0 0 5px rgba(255,255,255,0); }
+}
+
+/* Memory bar inside the memory card */
+.stat-mem .bar {
+    margin-top: 6px;
+    height: 4px;
+    background: var(--bg-input);
+    border-radius: 2px;
+    overflow: hidden;
+}
+.stat-mem .bar-fill {
+    height: 100%;
+    background: linear-gradient(to right, var(--fg-1), var(--fg-0));
+    transition: width 220ms ease;
+}
+
+/* ──────────────── Instruction mix grid ──────────────── */
+.stats-mix-wrap {
+    border-top: 1px solid var(--line-1);
+    padding-top: 12px;
+}
+.stats-mix-title {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: var(--fg-3);
+    margin-bottom: 8px;
+}
+.stats-mix {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 10px;
+}
+.mix-card {
+    background: var(--bg-1);
+    border: 1px solid var(--line-1);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+.mix-card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+}
+.mix-card-label {
+    font-size: 12px;
+    color: var(--fg-2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.mix-card-pct {
+    font-size: 11px;
+    color: var(--fg-3);
+}
+.mix-card-bar {
+    height: 4px;
+    background: var(--bg-input);
+    border-radius: 2px;
+    overflow: hidden;
+}
+.mix-card-bar-fill {
+    height: 100%;
+    background: var(--fg-1);
+    transition: width 220ms ease;
+}
+.mix-card-foot {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 12px;
+}
+.mix-card-count { color: var(--fg-0); font-size: 14px; }
+.mix-card-sub { color: var(--fg-3); font-size: 11px; }
+
+/* ──────────────── CPU spec strip (bottom of stats bar) ──────────────── */
+.stats-cpu {
+    border-top: 1px solid var(--line-1);
+    padding-top: 10px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 8px;
+    font-size: 12px;
+    color: var(--fg-2);
+}
+.stats-cpu .cpu-label {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: var(--fg-3);
+    margin-right: 6px;
+}
+.stats-cpu .sys-mono { color: var(--fg-1); font-size: 12px; }
+.stats-cpu .sys-mute { color: var(--fg-3); font-size: 11px; }

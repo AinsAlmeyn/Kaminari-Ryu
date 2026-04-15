@@ -19,3 +19,19 @@ Thumbs.db
 
 # External test suites pulled at build time
 tools/riscv-tests/
+
+# C# / .NET build output
+host/**/bin/
+host/**/obj/
+*.user
+.vs/
+
+# CMake out-of-source build trees
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+
+# Python bytecode / caches
+__pycache__/
+*.pyc

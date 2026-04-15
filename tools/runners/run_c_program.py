@@ -35,14 +35,15 @@ TB_FILE       = REPO_ROOT / 'raijin' / 'dv' / 'riscv_test_tb.v'
 RTL_FILES = [
     'regfile.v', 'decoder.v', 'control.v', 'alu.v',
     'branch_unit.v', 'pc_reg.v', 'imem.v', 'dmem.v',
-    'csr_file.v', 'uart_sim.v', 'raijin_core.v',
+    'csr_file.v', 'uart_sim.v', 'm_unit.v', 'raijin_core.v',
 ]
 
 
-def compile_program(sources: list[Path], elf: Path, includes: list[Path]) -> None:
+def compile_program(sources: list[Path], elf: Path, includes: list[Path],
+                    march: str = 'rv32i_zicsr') -> None:
     cmd = [
         'riscv-none-elf-gcc',
-        '-march=rv32i_zicsr', '-mabi=ilp32', '-mcmodel=medany',
+        f'-march={march}', '-mabi=ilp32', '-mcmodel=medany',
         '-nostdlib', '-nostartfiles', '-static',
         '-ffreestanding', '-O2', '-Wall',
         '-T', str(LINK_LD),
@@ -92,66 +93,6 @@ def simulate_iverilog(hex_path: Path, name: str, sim_bin: Path) -> int:
     return proc.returncode
 
 
-# Repo root in the format Docker on Windows expects when bind-mounting.
-# We use the literal Windows path (with backslashes); `docker run -v ...`
-# accepts that form on Docker Desktop / Windows.
-def _docker_repo_path() -> str:
-    return str(REPO_ROOT)
-
-
-VERILATOR_IMAGE = 'verilator/verilator:latest'
-
-VERILATOR_SUPPRESS = [
-    '-Wno-TIMESCALEMOD', '-Wno-WIDTHTRUNC', '-Wno-WIDTHEXPAND',
-    '-Wno-UNUSEDSIGNAL', '-Wno-UNUSEDPARAM', '-Wno-CASEINCOMPLETE',
-]
-
-
-def simulate_verilator(hex_path: Path, name: str, build_subdir: str,
-                       max_cycles: int | None) -> int:
-    """Build the testbench with Verilator inside the official Docker image,
-    then exec the resulting binary. Stdout is forwarded to our stdout."""
-    rtl_args_in = ['raijin/rtl/' + f for f in RTL_FILES]
-    tb_in       = 'raijin/dv/riscv_test_tb.v'
-    # Path the testbench will see for $readmemh. Inside the container we
-    # mount the repo at /work, so the hex's repo-relative path is the same.
-    hex_in_container = hex_path.relative_to(REPO_ROOT).as_posix()
-    binary_name = f'{name}_sim'
-    mdir_in     = f'build/verilator/{build_subdir}'
-    (REPO_ROOT / mdir_in).mkdir(parents=True, exist_ok=True)
-
-    common_env = {**os.environ, 'MSYS_NO_PATHCONV': '1'}
-
-    build_cmd = [
-        'docker', 'run', '--rm',
-        '-v', f'{_docker_repo_path()}:/work', '-w', '/work',
-        VERILATOR_IMAGE,
-        '--binary', '--top-module', 'riscv_test_tb',
-        f'-DTEST_HEX_FILE="{hex_in_container}"',
-        f'-DTEST_NAME="{name}"',
-    ]
-    if max_cycles is not None:
-        build_cmd.append(f'-DMAX_CYCLES={max_cycles}')
-    build_cmd += VERILATOR_SUPPRESS
-    build_cmd += ['-Iraijin/rtl', '--Mdir', mdir_in, '-o', binary_name]
-    build_cmd += rtl_args_in + [tb_in]
-
-    proc = subprocess.run(build_cmd, env=common_env, capture_output=True, text=True)
-    if proc.returncode != 0:
-        print('verilator build error:\n' + proc.stderr, file=sys.stderr)
-        return 1
-
-    # Step 2: run the built binary inside the same image (it ships with libstdc++)
-    run_cmd = [
-        'docker', 'run', '--rm',
-        '-v', f'{_docker_repo_path()}:/work', '-w', '/work',
-        '--entrypoint', f'/work/{mdir_in}/{binary_name}',
-        VERILATOR_IMAGE,
-    ]
-    proc = subprocess.run(run_cmd, env=common_env, text=True)
-    return proc.returncode
-
-
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument('sources', nargs='+', type=Path,
@@ -161,11 +102,13 @@ def main(argv: list[str]) -> int:
     ap.add_argument('--include', '-I', action='append', default=[], type=Path,
                     help='additional include directory')
     ap.add_argument('--name', help='override base name for output files')
-    ap.add_argument('--simulator', choices=('iverilog', 'verilator'),
+    ap.add_argument('--simulator', choices=('iverilog',),
                     default='iverilog',
-                    help='backend simulator (default iverilog)')
+                    help='backend simulator (currently only iverilog)')
     ap.add_argument('--max-cycles', type=int, default=None,
                     help='override MAX_CYCLES inside the testbench')
+    ap.add_argument('--march', default='rv32i_zicsr',
+                    help='gcc -march flag (e.g. rv32im_zicsr to use M extension)')
     args = ap.parse_args(argv)
 
     if not shutil.which('riscv-none-elf-gcc'):
@@ -180,18 +123,12 @@ def main(argv: list[str]) -> int:
     sim  = BUILD_DIR / f'{name}.sim'
 
     try:
-        compile_program(args.sources, elf, args.include)
+        compile_program(args.sources, elf, args.include, march=args.march)
         elf_to_hex(elf, hexp, args.depth)
     except RuntimeError as e:
         print(f'error: {e}', file=sys.stderr)
         return 1
 
-    if args.simulator == 'verilator':
-        if not shutil.which('docker'):
-            print('error: docker not on PATH; needed for the verilator backend.',
-                  file=sys.stderr)
-            return 1
-        return simulate_verilator(hexp, name, name, args.max_cycles)
     return simulate_iverilog(hexp, name, sim)
 
 

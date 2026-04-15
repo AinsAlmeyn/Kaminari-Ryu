@@ -99,6 +99,7 @@ module raijin_core #(
     wire [1:0] csr_op;
     wire       csr_src_sel;
     wire       is_system_priv;
+    wire       is_m_op;
 
     control control_inst (
         .opcode         (opcode),
@@ -116,7 +117,8 @@ module raijin_core #(
         .csr_access_en  (csr_access_en),
         .csr_op         (csr_op),
         .csr_src_sel    (csr_src_sel),
-        .is_system_priv (is_system_priv)
+        .is_system_priv (is_system_priv),
+        .is_m_op        (is_m_op)
     );
 
     // ====================================================================
@@ -187,6 +189,7 @@ module raijin_core #(
 
     regfile regfile_inst (
         .clk          (clk),
+        .reset        (reset),
         .write_enable (reg_write_en),
         .read_addr1   (rs1),
         .read_addr2   (rs2),
@@ -231,6 +234,19 @@ module raijin_core #(
         .op     (alu_op),
         .result (alu_result),
         .zero   (alu_zero)
+    );
+
+    // ====================================================================
+    // M extension execution unit (mul + div). Runs in parallel with the
+    // ALU; is_m_op selects its result over the ALU's at writeback time.
+    // ====================================================================
+    wire [31:0] m_result;
+
+    m_unit m_unit_inst (
+        .rs1_data (rs1_data),
+        .rs2_data (rs2_data),
+        .funct3   (funct3),
+        .result   (m_result)
     );
 
     // ====================================================================
@@ -279,6 +295,7 @@ module raijin_core #(
     uart_sim uart_inst (
         .clk        (clk),
         .cs         (is_uart_addr),
+        .read_en    (mem_read_en & is_uart_addr),
         .write_en   (uart_write_en_eff),
         .addr       (alu_result),
         .write_data (rs2_data),
@@ -320,16 +337,22 @@ module raijin_core #(
     );
 
     // ====================================================================
-    // Writeback mux. Extended with WB_SRC_CSR for Zicsr
+    // Writeback mux. Extended with WB_SRC_CSR for Zicsr.
+    // RV32M results override the regular wb_src_sel decode: when an M-op
+    // is in flight, m_unit's result wins over whatever the ALU produced.
     // ====================================================================
     always @(*) begin
-        case (wb_src_sel)
-            `WB_SRC_ALU : wb_data = alu_result;
-            `WB_SRC_MEM : wb_data = mem_read_data;
-            `WB_SRC_PC4 : wb_data = pc + 32'd4;
-            `WB_SRC_CSR : wb_data = csr_rdata;
-            default     : wb_data = alu_result;
-        endcase
+        if (is_m_op) begin
+            wb_data = m_result;
+        end else begin
+            case (wb_src_sel)
+                `WB_SRC_ALU : wb_data = alu_result;
+                `WB_SRC_MEM : wb_data = mem_read_data;
+                `WB_SRC_PC4 : wb_data = pc + 32'd4;
+                `WB_SRC_CSR : wb_data = csr_rdata;
+                default     : wb_data = alu_result;
+            endcase
+        end
     end
 
     // ====================================================================
@@ -350,6 +373,41 @@ module raijin_core #(
             next_pc = alu_result;
         else
             next_pc = pc + 32'd4;
+    end
+
+    // ====================================================================
+    // Hardware performance counters. Each one increments by 1 per cycle in
+    // which an instruction of the named class commits. They are inspired
+    // by the RISC-V hpmcounter*'s but exposed directly via Verilator's
+    // public_flat_rd to the host so the dashboard can render an instruction
+    // mix breakdown without pulling raw CSR reads.
+    // ====================================================================
+    reg [63:0] cnt_mul          /* verilator public_flat_rd */;
+    reg [63:0] cnt_branch_total /* verilator public_flat_rd */;
+    reg [63:0] cnt_branch_taken /* verilator public_flat_rd */;
+    reg [63:0] cnt_jump         /* verilator public_flat_rd */;
+    reg [63:0] cnt_load         /* verilator public_flat_rd */;
+    reg [63:0] cnt_store        /* verilator public_flat_rd */;
+    reg [63:0] cnt_trap         /* verilator public_flat_rd */;
+
+    always @(posedge clk) begin
+        if (reset) begin
+            cnt_mul          <= 64'b0;
+            cnt_branch_total <= 64'b0;
+            cnt_branch_taken <= 64'b0;
+            cnt_jump         <= 64'b0;
+            cnt_load         <= 64'b0;
+            cnt_store        <= 64'b0;
+            cnt_trap         <= 64'b0;
+        end else begin
+            if (is_m_op)                  cnt_mul          <= cnt_mul          + 64'd1;
+            if (branch)                   cnt_branch_total <= cnt_branch_total + 64'd1;
+            if (branch && branch_taken)   cnt_branch_taken <= cnt_branch_taken + 64'd1;
+            if (jump)                     cnt_jump         <= cnt_jump         + 64'd1;
+            if (mem_read_en)              cnt_load         <= cnt_load         + 64'd1;
+            if (mem_write_en_raw)         cnt_store        <= cnt_store        + 64'd1;
+            if (trap_en)                  cnt_trap         <= cnt_trap         + 64'd1;
+        end
     end
 
 endmodule
