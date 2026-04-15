@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # activate.sh: puts the RISC-V toolchain on PATH for this shell session.
-# Usage:  source tools/activate.sh
+# Usage:  source tools/runners/activate-toolchain.sh
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     echo "activate.sh must be sourced, not executed:"
-    echo "    source tools/activate.sh"
+    echo "    source tools/runners/activate-toolchain.sh"
     exit 1
 fi
 

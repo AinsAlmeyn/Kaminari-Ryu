@@ -16,3 +16,6 @@ work/
 *.swp
 .DS_Store
 Thumbs.db
+
+# External test suites pulled at build time
+tools/riscv-tests/

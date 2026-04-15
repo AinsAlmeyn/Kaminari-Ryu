@@ -144,9 +144,12 @@
 // Exception cause codes (written into mcause on a synchronous trap).
 // See Privileged spec Table 3.6.
 // ============================================================
-`define MCAUSE_ILLEGAL_INSTR   32'd2
-`define MCAUSE_BREAKPOINT      32'd3
-`define MCAUSE_ECALL_FROM_M    32'd11
+`define MCAUSE_INSTR_MISALIGNED   32'd0
+`define MCAUSE_ILLEGAL_INSTR      32'd2
+`define MCAUSE_BREAKPOINT         32'd3
+`define MCAUSE_LOAD_MISALIGNED    32'd4
+`define MCAUSE_STORE_MISALIGNED   32'd6
+`define MCAUSE_ECALL_FROM_M       32'd11
 
 // ============================================================
 // Register ABI aliases. Just convenience names for register numbers.

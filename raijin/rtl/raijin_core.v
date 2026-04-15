@@ -129,19 +129,51 @@ module raijin_core #(
     wire is_illegal_priv = is_system_priv && !(is_ecall || is_ebreak || is_mret);
 
     // ====================================================================
+    // Misaligned data access detection.
+    //   funct3[1:0] = 00 -> byte   (always aligned)
+    //   funct3[1:0] = 01 -> half   (addr[0] must be 0)
+    //   funct3[1:0] = 10 -> word   (addr[1:0] must be 0)
+    // ====================================================================
+    wire [1:0] mem_addr_low  = alu_result[1:0];
+    wire       access_is_word = (funct3[1:0] == 2'b10);
+    wire       access_is_half = (funct3[1:0] == 2'b01);
+
+    wire addr_misaligned =
+          (access_is_word && (mem_addr_low     != 2'b00))
+       || (access_is_half && (mem_addr_low[0]  != 1'b0));
+
+    wire load_misaligned  = mem_read_en      && addr_misaligned;
+    wire store_misaligned = mem_write_en_raw && addr_misaligned;
+
+    // ====================================================================
     // Trap detection + signal generation
     // ====================================================================
-    wire trap_en = is_ecall | is_ebreak | is_illegal_priv;
+    wire trap_en = is_ecall | is_ebreak | is_illegal_priv
+                 | load_misaligned | store_misaligned;
 
     reg [31:0] trap_cause;
     always @(*) begin
-        if      (is_ecall)  trap_cause = `MCAUSE_ECALL_FROM_M;
-        else if (is_ebreak) trap_cause = `MCAUSE_BREAKPOINT;
-        else                trap_cause = `MCAUSE_ILLEGAL_INSTR;
+        // Priority: misalignments before ecall/ebreak/illegal so that a
+        // bad address in a SYSTEM-adjacent instruction still reports the
+        // correct cause.
+        if      (load_misaligned)  trap_cause = `MCAUSE_LOAD_MISALIGNED;
+        else if (store_misaligned) trap_cause = `MCAUSE_STORE_MISALIGNED;
+        else if (is_ecall)         trap_cause = `MCAUSE_ECALL_FROM_M;
+        else if (is_ebreak)        trap_cause = `MCAUSE_BREAKPOINT;
+        else                       trap_cause = `MCAUSE_ILLEGAL_INSTR;
     end
 
-    wire [31:0] trap_pc   = pc;
-    wire [31:0] trap_tval = 32'b0;       // minimal: no instr/address capture
+    wire [31:0] trap_pc = pc;
+
+    // mtval captures the faulting address on a memory misalignment.
+    // For other synchronous exceptions we leave it at zero (WARL-legal).
+    reg [31:0] trap_tval;
+    always @(*) begin
+        if (load_misaligned || store_misaligned)
+            trap_tval = alu_result;
+        else
+            trap_tval = 32'b0;
+    end
 
     // ====================================================================
     // Register file
@@ -214,10 +246,22 @@ module raijin_core #(
     );
 
     // ====================================================================
-    // Data memory
+    // Data-bus address decode
+    //   0x1xxx_xxxx -> UART MMIO
+    //   anything else -> DMEM
+    // The decode is purely combinational; only the path that wins gets
+    // its write_en asserted.
     // ====================================================================
-    wire [31:0] mem_read_data;
-    wire mem_write_en = mem_write_en_raw & ~trap_en;
+    wire is_uart_addr  = (alu_result[31:28] == 4'h1);
+    wire is_dmem_addr  = ~is_uart_addr;
+
+    wire mem_write_en      = mem_write_en_raw & ~trap_en;
+    wire dmem_write_en_eff = mem_write_en & is_dmem_addr;
+    wire uart_write_en_eff = mem_write_en & is_uart_addr;
+
+    wire [31:0] dmem_read_data;
+    wire [31:0] uart_read_data;
+    wire [31:0] mem_read_data = is_uart_addr ? uart_read_data : dmem_read_data;
 
     dmem #(
         .DEPTH_WORDS (DMEM_DEPTH_WORDS),
@@ -226,10 +270,19 @@ module raijin_core #(
         .clk          (clk),
         .addr         (alu_result),
         .write_data   (rs2_data),
-        .mem_read_en  (mem_read_en),
-        .mem_write_en (mem_write_en),
+        .mem_read_en  (mem_read_en & is_dmem_addr),
+        .mem_write_en (dmem_write_en_eff),
         .funct3       (funct3),
-        .read_data    (mem_read_data)
+        .read_data    (dmem_read_data)
+    );
+
+    uart_sim uart_inst (
+        .clk        (clk),
+        .cs         (is_uart_addr),
+        .write_en   (uart_write_en_eff),
+        .addr       (alu_result),
+        .write_data (rs2_data),
+        .read_data  (uart_read_data)
     );
 
     // ====================================================================
