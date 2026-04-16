@@ -95,13 +95,28 @@ target_include_directories(raijin PUBLIC
 # We explicitly do NOT enable --threads; for a design this small the
 # partitioning barrier cost exceeds the parallel gain.
 # ----------------------------------------------------------------------------
+# -march=x86-64-v3 is an x86-only codegen flag (BMI2/AVX2). Apple Silicon
+# and other non-x86 targets reject it outright, so only pass it on x86_64.
+# On arm64 the default -O3 output already uses NEON + modern features.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+    set(RAIJIN_ARCH_FLAG "-march=x86-64-v3")
+else()
+    set(RAIJIN_ARCH_FLAG "")
+endif()
+
 set(RAIJIN_HOT_CFLAGS
-    "-O3 -flto=auto -march=x86-64-v3"
+    "-O3 -flto=auto ${RAIJIN_ARCH_FLAG}"
     "-fno-stack-protector -fomit-frame-pointer -fvisibility=hidden"
 )
 string(REPLACE ";" " " RAIJIN_HOT_CFLAGS "${RAIJIN_HOT_CFLAGS}")
 
-set(RAIJIN_HOT_LDFLAGS "-Wl,--gc-sections -Wl,-O1 -flto=auto")
+# Dead-code stripping differs between linkers. GNU ld (Linux) / lld accept
+# --gc-sections; Apple's ld64 uses -dead_strip. Pick the right one.
+if(APPLE)
+    set(RAIJIN_HOT_LDFLAGS "-Wl,-dead_strip -flto=auto")
+else()
+    set(RAIJIN_HOT_LDFLAGS "-Wl,--gc-sections -Wl,-O1 -flto=auto")
+endif()
 
 # Attach the Verilated model to the shared library.
 verilate(raijin
@@ -127,14 +142,28 @@ verilate(raijin
 )
 
 # Apply the same hot flags to our own wrapper TU so raijin_api.cpp /
-# dpi_hooks.cpp match the verilated code's optimization level.
-target_compile_options(raijin PRIVATE
-    -O3 -flto=auto -march=x86-64-v3
-    -fno-stack-protector -fomit-frame-pointer
-)
-target_link_options(raijin PRIVATE
-    -Wl,--gc-sections -Wl,-O1 -flto=auto
-)
+# dpi_hooks.cpp match the verilated code's optimization level. The arch
+# flag and linker GC behaviour follow the same platform split as above.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+    target_compile_options(raijin PRIVATE
+        -O3 -flto=auto -march=x86-64-v3
+        -fno-stack-protector -fomit-frame-pointer
+    )
+else()
+    target_compile_options(raijin PRIVATE
+        -O3 -flto=auto
+        -fno-stack-protector -fomit-frame-pointer
+    )
+endif()
+if(APPLE)
+    target_link_options(raijin PRIVATE
+        -Wl,-dead_strip -flto=auto
+    )
+else()
+    target_link_options(raijin PRIVATE
+        -Wl,--gc-sections -Wl,-O1 -flto=auto
+    )
+endif()
 
 # On Windows, statically link the GCC runtime so raijin.dll has zero
 # external MinGW dependencies. The released zip then ships only

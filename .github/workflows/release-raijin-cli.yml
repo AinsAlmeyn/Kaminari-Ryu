@@ -263,23 +263,20 @@ jobs:
           path: dist/raijin-cli-linux-x64.tar.gz
 
   # ---------------------------------------------------------------------------
-  # macOS builds: one job per arch. macos-14 is Apple Silicon (arm64), macos-13
-  # is Intel (x86_64). Each builds its own native libraijin.dylib via cmake,
-  # packages a tarball via build.sh, and smoke-tests the extract → run flow.
-  # Unsigned for now (no Apple Developer Program membership), so the README
-  # includes the xattr workaround users need to clear Gatekeeper quarantine.
+  # macOS build: Apple Silicon only. GitHub deprecated the macos-13 Intel
+  # runner for free-tier repos in early 2026, and Apple Silicon is the
+  # dominant architecture on current Macs. Intel Mac users can still build
+  # from source (documented in host/Raijin.Cli/README.md).
+  #
+  # Builds libraijin.dylib natively on macos-14, packages a tarball via
+  # build.sh, and smoke-tests the extract → run flow. Unsigned for now
+  # (no Apple Developer Program membership), so the README walks users
+  # through the one-off xattr step to clear Gatekeeper quarantine.
   # ---------------------------------------------------------------------------
   build-macos-cli:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-14
-            arch:   arm64
-          - runner: macos-13
-            arch:   x64
-
-    runs-on: ${{ matrix.runner }}
+    runs-on: macos-14
+    env:
+      ARCH_TAG: arm64
 
     steps:
       - name: Checkout
@@ -314,7 +311,7 @@ jobs:
       - name: Stage release artifacts
         run: |
           mkdir -p dist
-          cp "host/Raijin.Cli/bin/raijin-cli-macos-${{ matrix.arch }}.tar.gz" dist/
+          cp "host/Raijin.Cli/bin/raijin-cli-macos-${ARCH_TAG}.tar.gz" dist/
           ls -la dist/
 
       - name: Smoke test portable tarball
@@ -323,7 +320,7 @@ jobs:
           smokeDir="dist/smoke-tar"
           rm -rf "$smokeDir"
           mkdir -p "$smokeDir"
-          tar -xzf "dist/raijin-cli-macos-${{ matrix.arch }}.tar.gz" -C "$smokeDir"
+          tar -xzf "dist/raijin-cli-macos-${ARCH_TAG}.tar.gz" -C "$smokeDir"
 
           exe="$smokeDir/raijin"
           lib="$smokeDir/libraijin.dylib"
@@ -375,8 +372,8 @@ jobs:
       - name: Upload macos artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: raijin-cli-macos-${{ matrix.arch }}
-          path: dist/raijin-cli-macos-${{ matrix.arch }}.tar.gz
+          name: raijin-cli-macos-${{ env.ARCH_TAG }}
+          path: dist/raijin-cli-macos-${{ env.ARCH_TAG }}.tar.gz
 
   # ---------------------------------------------------------------------------
   # Publish: gathers all platform artifacts and publishes them as a single
@@ -406,12 +403,6 @@ jobs:
           name: raijin-cli-macos-arm64
           path: dist
 
-      - name: Download macos x64 artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: raijin-cli-macos-x64
-          path: dist
-
       - name: Inspect staged artifacts
         run: ls -la dist/
 
@@ -423,7 +414,6 @@ jobs:
             dist/raijin-setup.exe
             dist/raijin-cli-linux-x64.tar.gz
             dist/raijin-cli-macos-arm64.tar.gz
-            dist/raijin-cli-macos-x64.tar.gz
           body: |
             ## Raijin CLI
 
@@ -464,10 +454,13 @@ jobs:
             Built and tested on Ubuntu 24.04 (glibc 2.39, libstdc++ 13).
             Should work on any reasonably recent distribution.
 
-            ### macOS (Apple Silicon and Intel)
+            ### macOS (Apple Silicon)
 
-            Download `raijin-cli-macos-arm64.tar.gz` for M1/M2/M3/M4 Macs, or
-            `raijin-cli-macos-x64.tar.gz` for Intel Macs.
+            Download `raijin-cli-macos-arm64.tar.gz` for M1/M2/M3/M4 Macs.
+            Intel Mac users can build from source (see the CLI README for
+            the `./build.sh` steps) — GitHub Actions' Intel macOS runner
+            was deprecated in early 2026, so we no longer ship an Intel
+            tarball directly.
 
             The release is **not code-signed** (no Apple Developer Program
             membership). Gatekeeper will block the first run with "raijin
@@ -483,8 +476,7 @@ jobs:
             ```
 
             After the xattr step the binary runs normally and is never
-            prompted again. Built on macos-14 (Apple Silicon) and macos-13
-            (Intel) GitHub runners.
+            prompted again. Built on the macos-14 Apple Silicon runner.
 
             ### What's in the bundle
             - `raijin` / `raijin.exe`     Go CLI host

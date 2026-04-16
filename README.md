@@ -154,9 +154,9 @@ tar -xzf raijin-cli-linux-x64.tar.gz
 # paste the one-liner it prints into your shell, open a new terminal
 ```
 
-### macOS (Apple Silicon / Intel)
+### macOS (Apple Silicon)
 
-1. Download **`raijin-cli-macos-arm64.tar.gz`** (M1 / M2 / M3 / M4) or **`raijin-cli-macos-x64.tar.gz`** (Intel) from the [latest release](https://github.com/AinsAlmeyn/Kaminari-Ryu/releases/latest)
+1. Download **`raijin-cli-macos-arm64.tar.gz`** (M1 / M2 / M3 / M4) from the [latest release](https://github.com/AinsAlmeyn/Kaminari-Ryu/releases/latest). Intel Mac users can build from source (see [host/Raijin.Cli/README.md](host/Raijin.Cli/README.md))
 
 ```bash
 tar -xzf raijin-cli-macos-arm64.tar.gz

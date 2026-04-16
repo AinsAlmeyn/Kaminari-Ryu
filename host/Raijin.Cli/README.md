@@ -165,9 +165,9 @@ The script auto-detects the host OS via `uname -s` and produces:
 | Windows (MSYS2) | `raijin.exe`, `raijin.dll`, `raijin-cli-windows-x64.zip`, `raijin-setup.exe` |
 | Linux x64 | `raijin`, `libraijin.so`, `raijin-cli-linux-x64.tar.gz` |
 | macOS arm64 | `raijin`, `libraijin.dylib`, `raijin-cli-macos-arm64.tar.gz` |
-| macOS x64 | `raijin`, `libraijin.dylib`, `raijin-cli-macos-x64.tar.gz` |
+| macOS x64 (local build) | `raijin`, `libraijin.dylib`, `raijin-cli-macos-x64.tar.gz` |
 
-The archive name's arch tag (`x64` / `arm64`) comes from `uname -m` on the host, so building on an M-series Mac produces the arm64 tarball and an Intel Mac produces the x64 one. CI runs both to cover each release.
+The archive name's arch tag (`x64` / `arm64`) comes from `uname -m` on the host. CI publishes the arm64 tarball from a macos-14 runner; GitHub Actions' Intel macOS runner was retired in early 2026, so Intel Mac users run `./build.sh` locally to produce the x64 tarball.
 
 > [!NOTE]
 > macOS release tarballs are **not code-signed**. First run requires `xattr -d com.apple.quarantine ./raijin ./libraijin.dylib` to clear the Gatekeeper attribute added by browsers when the file was downloaded. The release `README.txt` inside the tarball walks users through this.
