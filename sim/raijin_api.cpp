@@ -47,6 +47,26 @@ extern "C" int nanosleep64(const struct _timespec64* req,
     if (rem) { rem->tv_sec = 0; rem->tv_nsec = 0; }
     return 0;
 }
+
+// MinGW/UCRT's fopen interprets its byte argument as the active Windows code
+// page (CP1254 on Turkish locales, CP1252 on western, ...), not UTF-8. The
+// Go host passes UTF-8 paths (e.g. "C:\Users\Şule\.raijin\programs\snake.hex"),
+// so any non-ASCII character in %USERPROFILE% turns into "file not found"
+// even when the file is right there. Convert UTF-8 to UTF-16 and use
+// _wfopen, which talks to the wide Win32 API directly and ignores the ACP.
+static std::FILE* raijin_fopen_utf8(const char* path, const wchar_t* wmode) {
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, path, -1, nullptr, 0);
+    if (wlen <= 0) return nullptr;
+    std::wstring wpath(static_cast<size_t>(wlen - 1), L'\0');
+    if (MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath.data(), wlen) <= 0) {
+        return nullptr;
+    }
+    return _wfopen(wpath.c_str(), wmode);
+}
+#else
+static std::FILE* raijin_fopen_utf8(const char* path, const char* mode) {
+    return std::fopen(path, mode);
+}
 #endif
 
 // Implemented in dpi_hooks.cpp.
@@ -112,7 +132,11 @@ struct RaijinSim {
     // word per line, starting at word 0. Blank lines and // comments tolerated.
     // @addr directives respected (address is a hex word index).
     int load_hex(const char* path) {
-        std::FILE* fp = std::fopen(path, "r");
+#if defined(_WIN32)
+        std::FILE* fp = raijin_fopen_utf8(path, L"r");
+#else
+        std::FILE* fp = raijin_fopen_utf8(path, "r");
+#endif
         if (!fp) return -1;
 
         // Wipe both memories so a partial program does not leave stale data.
