@@ -6,6 +6,8 @@ import (
 	"context"
 	"os"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // readKeys runs in a goroutine, reading stdin byte-by-byte under raw mode
@@ -47,11 +49,20 @@ func readKeys(ctx context.Context, ch chan<- byte) {
 		}
 		b := buf[0]
 
-		// Absorb a whole escape sequence in one go so no downstream code
-		// sees the digits of a CSI reply (this is where the "3" artefacts
-		// came from in the C# port).
+		// ESC is ambiguous: it can be a lone Esc key press (the user wants to
+		// quit from the pause screen) OR the first byte of a CSI/SS3 sequence
+		// (arrow key, function key, terminal reply). Peek for a follow-up
+		// byte with a short deadline. If nothing arrives within ~40 ms it
+		// was a real Esc; otherwise swallow the whole sequence so CSI digits
+		// don't leak into the key channel.
 		if b == 0x1B {
-			swallowEscape(stdin)
+			fds := []unix.PollFd{{Fd: int32(stdin.Fd()), Events: unix.POLLIN}}
+			n, _ := unix.Poll(fds, 40)
+			if n > 0 {
+				swallowEscape(stdin)
+			} else {
+				send(ctx, ch, 0x1B)
+			}
 			continue
 		}
 

@@ -77,9 +77,9 @@ func Run(opts Options) int {
 		tty.enter()
 		defer tty.leave()
 
-		oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
+		restore, err := enterRawMode(int(os.Stdin.Fd()))
 		if err == nil {
-			restoreStdin = func() error { return term.Restore(int(os.Stdin.Fd()), oldState) }
+			restoreStdin = restore
 			defer restoreStdin()
 		}
 	}
