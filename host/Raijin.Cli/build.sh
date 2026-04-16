@@ -32,18 +32,27 @@ case "$(uname -s)" in
     *)                    HOST_OS=unknown ;;
 esac
 
+# Architecture tag. uname -m reports x86_64 on Intel Macs/Linux and arm64
+# (macOS) or aarch64 (Linux) on ARM hosts. We normalise to "x64" / "arm64"
+# so the archive names stay consistent across platforms.
+case "$(uname -m)" in
+    x86_64|amd64)    ARCH_TAG=x64   ;;
+    arm64|aarch64)   ARCH_TAG=arm64 ;;
+    *)               ARCH_TAG="$(uname -m)" ;;
+esac
+
 if [[ "$HOST_OS" == "windows" ]]; then
     EXE_SUFFIX=".exe"
     LIB_NAME="raijin.dll"
-    ARCHIVE_NAME="raijin-cli-windows-x64.zip"
+    ARCHIVE_NAME="raijin-cli-windows-${ARCH_TAG}.zip"
 elif [[ "$HOST_OS" == "darwin" ]]; then
     EXE_SUFFIX=""
     LIB_NAME="libraijin.dylib"
-    ARCHIVE_NAME="raijin-cli-macos-x64.tar.gz"
+    ARCHIVE_NAME="raijin-cli-macos-${ARCH_TAG}.tar.gz"
 else
     EXE_SUFFIX=""
     LIB_NAME="libraijin.so"
-    ARCHIVE_NAME="raijin-cli-linux-x64.tar.gz"
+    ARCHIVE_NAME="raijin-cli-linux-${ARCH_TAG}.tar.gz"
 fi
 
 CLI_NAME="raijin${EXE_SUFFIX}"
@@ -112,8 +121,8 @@ done
 
 echo "[4/$TOTAL] write README.txt"
 if [[ "$HOST_OS" == "windows" ]]; then
-    cat > "$OUT_DIR/README.txt" <<'EOF'
-Raijin CLI  Windows x64
+    cat > "$OUT_DIR/README.txt" <<EOF
+Raijin CLI  Windows ${ARCH_TAG}
 ========================
 
 This zip is the portable bundle: raijin.exe + raijin.dll + demo programs
@@ -143,13 +152,28 @@ If raijin.exe reports "cannot load raijin.dll":
   directory. Some archive tools split files across subfolders.
 EOF
 else
+    if [[ "$HOST_OS" == "darwin" ]]; then
+        GATEKEEPER_NOTE=$(cat <<'GKEOF'
+
+First-run on macOS (unsigned release):
+  The release binary is not code-signed, so Gatekeeper will refuse to run
+  it on first try with "raijin cannot be opened because the developer
+  cannot be verified". Clear the quarantine attribute once after you
+  extract the tarball:
+    xattr -d com.apple.quarantine ./raijin ./libraijin.dylib
+  After that, it runs normally and does not prompt again.
+GKEOF
+)
+    else
+        GATEKEEPER_NOTE=""
+    fi
     cat > "$OUT_DIR/README.txt" <<EOF
-Raijin CLI  ${HOST_OS} x64
+Raijin CLI  ${HOST_OS} ${ARCH_TAG}
 ========================
 
 This tarball is the portable bundle: raijin + ${LIB_NAME} + demo programs
 + compile SDK. Run things from this directory with ./raijin ...
-
+${GATEKEEPER_NOTE}
 Want raijin available from any terminal?
   ./raijin install
   (drops a copy into ~/.raijin/bin and prints the one-liner you can paste
@@ -173,6 +197,7 @@ Compile your own program:
 If ./raijin reports "cannot load ${LIB_NAME}":
   Make sure raijin and ${LIB_NAME} live in the SAME directory.
   On Linux, run \`ldd ${LIB_NAME}\` to see if a system library is missing.
+  On macOS, run \`otool -L ${LIB_NAME}\` for the equivalent check.
 EOF
 fi
 echo "     wrote $OUT_DIR/README.txt"

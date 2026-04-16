@@ -6,7 +6,7 @@ A RISC-V CPU designed from scratch in Verilog.
 
 [![Build](https://github.com/AinsAlmeyn/Kaminari-Ryu/actions/workflows/release-raijin-cli.yml/badge.svg)](https://github.com/AinsAlmeyn/Kaminari-Ryu/actions)
 [![Release](https://img.shields.io/github/v/release/AinsAlmeyn/Kaminari-Ryu?label=latest&color=orange)](https://github.com/AinsAlmeyn/Kaminari-Ryu/releases/latest)
-![Platform](https://img.shields.io/badge/platform-windows%20%7C%20linux-blue)
+![Platform](https://img.shields.io/badge/platform-windows%20%7C%20linux%20%7C%20macos-blue)
 ![ISA](https://img.shields.io/badge/ISA-RISC--V%20RV32IM-red)
 ![HDL](https://img.shields.io/badge/HDL-Verilog-orange)
 
@@ -154,8 +154,31 @@ tar -xzf raijin-cli-linux-x64.tar.gz
 # paste the one-liner it prints into your shell, open a new terminal
 ```
 
+### macOS (Apple Silicon / Intel)
+
+1. Download **`raijin-cli-macos-arm64.tar.gz`** (M1 / M2 / M3 / M4) or **`raijin-cli-macos-x64.tar.gz`** (Intel) from the [latest release](https://github.com/AinsAlmeyn/Kaminari-Ryu/releases/latest)
+
+```bash
+tar -xzf raijin-cli-macos-arm64.tar.gz
+
+# First-run only: clear Gatekeeper quarantine on the unsigned binaries.
+# Without this, macOS refuses to launch with "cannot be opened because the
+# developer cannot be verified". You only need to do this once after
+# extraction.
+xattr -d com.apple.quarantine ./raijin ./libraijin.dylib
+
+./raijin run doom
+
+# optional: install system-wide
+./raijin install
+# paste the one-liner it prints into your shell, open a new terminal
+```
+
 > [!NOTE]
-> Release binaries are self-contained. On Windows, `raijin.dll` statically links its GCC runtime (no libstdc++/libgcc/libwinpthread companions needed). On Linux, `libraijin.so` uses the system glibc and libstdc++ already present on every distribution.
+> The macOS release is **not code-signed** (no Apple Developer Program membership). The one-off `xattr -d com.apple.quarantine` is the standard workaround and is documented inside the bundle's `README.txt` too.
+
+> [!NOTE]
+> Release binaries are self-contained. On Windows, `raijin.dll` statically links its GCC runtime (no libstdc++/libgcc/libwinpthread companions needed). On Linux, `libraijin.so` uses the system glibc and libstdc++ already present on every distribution. On macOS, `libraijin.dylib` links only against the system libc++ and libSystem.
 
 ---
 

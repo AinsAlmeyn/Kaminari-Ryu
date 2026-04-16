@@ -163,8 +163,14 @@ The script auto-detects the host OS via `uname -s` and produces:
 | Host | Outputs in `bin/` |
 |------|-------------------|
 | Windows (MSYS2) | `raijin.exe`, `raijin.dll`, `raijin-cli-windows-x64.zip`, `raijin-setup.exe` |
-| Linux | `raijin`, `libraijin.so`, `raijin-cli-linux-x64.tar.gz` |
-| macOS | `raijin`, `libraijin.dylib`, `raijin-cli-macos-x64.tar.gz` (untested, no CI) |
+| Linux x64 | `raijin`, `libraijin.so`, `raijin-cli-linux-x64.tar.gz` |
+| macOS arm64 | `raijin`, `libraijin.dylib`, `raijin-cli-macos-arm64.tar.gz` |
+| macOS x64 | `raijin`, `libraijin.dylib`, `raijin-cli-macos-x64.tar.gz` |
+
+The archive name's arch tag (`x64` / `arm64`) comes from `uname -m` on the host, so building on an M-series Mac produces the arm64 tarball and an Intel Mac produces the x64 one. CI runs both to cover each release.
+
+> [!NOTE]
+> macOS release tarballs are **not code-signed**. First run requires `xattr -d com.apple.quarantine ./raijin ./libraijin.dylib` to clear the Gatekeeper attribute added by browsers when the file was downloaded. The release `README.txt` inside the tarball walks users through this.
 
 The simulator library must be built first from the repo root. See [`sim/README.md`](../../sim/README.md) for that step.
 
