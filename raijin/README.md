@@ -170,17 +170,18 @@ The detailed signal-level wiring is in [`raijin_core.v`](rtl/raijin_core.v), whi
 
 ## Revisions
 
-Raijin is developed as a single living codebase; historical snapshots live in git tags, not in parallel folders.
+Raijin is developed as a single living codebase; historical snapshots live in git history, not in parallel folders. Each `raijin-cli-v*` GitHub Release ships with a **Source code (zip)** asset that captures the full repository at that commit, so any CLI release also pins the exact CPU RTL state it was built against.
 
-- **`raijin-v1-baseline`** (historic): original single-cycle RV32IM + Zicsr core. No external interrupts, no CLINT, no WFI. 12 RTL modules.
-- **`raijin-v1.0`** (current `main`): the polished release. CLINT with `msip` + `mtimecmp` + `mtime`, full `mie`/`mip`/`misa`/identification CSRs, `mhpmcounter3..6`, machine-software and machine-timer interrupt paths, WFI, host-side counter v2 API (exception vs interrupt split, WFI commits, CSR access count), full 251-check testbench suite. 13 RTL modules.
+Milestone commits in CPU terms:
 
-To A/B benchmark two revisions side by side:
+- **Pre-interrupt single-cycle baseline** — `raijin-cli-v0.2.4` and earlier. Original RV32IM + Zicsr core. No external interrupts, no CLINT, no WFI. 12 RTL modules.
+- **Current `main`** (shipped with `raijin-cli-v0.3.0`) — adds the CLINT peripheral (`msip` + `mtimecmp` + `mtime`), full `mie`/`mip`/`misa`/identification CSRs, `mhpmcounter3..6`, machine-software and machine-timer interrupt paths, WFI, and the host-side counter v2 API. 13 RTL modules, 15 testbenches, 251 self-checks.
+
+To A/B benchmark the current tree against an older CLI release, download that release's source zip (or `git worktree add ../raijin-old <commit>` if you prefer the git route) and build both sims:
 
 ```bash
-git worktree add ../raijin-old raijin-v1-baseline
 cmake -S ../raijin-old/sim -B build/sim-old -G Ninja && cmake --build build/sim-old
-cmake -S sim             -B build/sim-new -G Ninja && cmake --build build/sim-new
+cmake -S sim               -B build/sim-new -G Ninja && cmake --build build/sim-new
 # two raijin.dll artifacts land in build/sim-{old,new}/bin/
 ```
 
