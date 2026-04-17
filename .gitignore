@@ -10,6 +10,11 @@ work/
 *.log
 *.jou
 
+# Transient benchmark + harness artifacts
+bench-results/
+tools/bench-harness/bench.exe
+tools/bench-harness/*.dll
+
 # Editor / OS
 .vscode/
 .idea/

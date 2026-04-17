@@ -153,7 +153,29 @@
 `define CSR_MCAUSE     12'h342
 `define CSR_MTVAL      12'h343
 `define CSR_MIP        12'h344
+`define CSR_MVENDORID  12'hF11
+`define CSR_MARCHID    12'hF12
+`define CSR_MIMPID     12'hF13
 `define CSR_MHARTID    12'hF14
+
+// ============================================================
+// Hardware performance counters (read-only in Raijin). RV32
+// splits each 64-bit counter into low and high halves.
+// Raijin wires four of them to the on-chip instruction-class
+// counters (see raijin_core.v):
+//   hpmcounter3  -> branch-taken events
+//   hpmcounter4  -> load  events
+//   hpmcounter5  -> store events
+//   hpmcounter6  -> mul/div events
+// ============================================================
+`define CSR_MHPMCOUNTER3   12'hB03
+`define CSR_MHPMCOUNTER4   12'hB04
+`define CSR_MHPMCOUNTER5   12'hB05
+`define CSR_MHPMCOUNTER6   12'hB06
+`define CSR_MHPMCOUNTER3H  12'hB83
+`define CSR_MHPMCOUNTER4H  12'hB84
+`define CSR_MHPMCOUNTER5H  12'hB85
+`define CSR_MHPMCOUNTER6H  12'hB86
 
 // Performance counters. Single-cycle core, so minstret tracks cycles 1:1
 // (subtract traps if exact retirement count matters). User-mode aliases
@@ -179,6 +201,21 @@
 `define MCAUSE_LOAD_MISALIGNED    32'd4
 `define MCAUSE_STORE_MISALIGNED   32'd6
 `define MCAUSE_ECALL_FROM_M       32'd11
+
+// Asynchronous interrupt causes have bit 31 set. Raijin implements
+// the two machine-mode lines you would find on any minimal RV32
+// embedded core: machine-software (MSIP, bit 3 of mie/mip) and
+// machine-timer (MTIP, bit 7).
+`define MCAUSE_M_SOFT_INTERRUPT   32'h8000_0003
+`define MCAUSE_M_TIMER_INTERRUPT  32'h8000_0007
+
+// WFI (wait-for-interrupt) has the same opcode/funct3 as the
+// other privileged SYSTEM ops; inst[31:20] discriminates.
+// Full encoding: funct7=0001000, rs2=00101, rs1=00000,
+// funct3=000, rd=00000, opcode=1110011 -> 0x10500073.
+// inst[31:20] == 12'h105.
+`define INSTR_WFI                32'h10500073
+`define PRIV_FIELD_WFI           12'h105
 
 // ============================================================
 // Register ABI aliases. Just convenience names for register numbers.

@@ -64,14 +64,57 @@ func Final(snap sim.Snapshot, program string) string {
 			{"loads", snap.Mix[4], ""},
 			{"stores", snap.Mix[5], ""},
 			{"jumps", snap.Mix[3], ""},
+			{"CSR reads/writes", snap.CsrAccess(), ""},
+			{"WFI commits", snap.WfiCommits(), ""},
 		}
 		for _, it := range items {
 			pct := float64(it.count) * 100 / float64(total)
 			b.WriteString(fmt.Sprintf("  %-16s %10s  %5.1f%%  %s\n",
 				it.label, theme.FormatCount(it.count), pct, it.note))
 		}
+
+		if snap.Mix[6] > 0 {
+			b.WriteString("\n")
+			b.WriteString(theme.Label.Render(" Trap breakdown"))
+			b.WriteString("\n")
+			exc := snap.Exceptions()
+			intr := snap.Interrupts()
+			b.WriteString(fmt.Sprintf("  %-16s %10s\n", "exceptions (sync)", theme.FormatCount(exc)))
+			b.WriteString(fmt.Sprintf("  %-16s %10s\n", "interrupts (async)", theme.FormatCount(intr)))
+			b.WriteString(fmt.Sprintf("  %-16s %10s  %s\n",
+				"final mcause", fmt.Sprintf("0x%08x", snap.CSRs.Mcause), mcauseName(snap.CSRs.Mcause)))
+		}
 	}
 	return b.String()
+}
+
+// mcauseName returns a short human label for an mcause value so the
+// trap breakdown panel is readable without the spec open.
+func mcauseName(mcause uint32) string {
+	if mcause&0x8000_0000 != 0 {
+		switch mcause & 0x7FFF_FFFF {
+		case 3:
+			return "machine software interrupt"
+		case 7:
+			return "machine timer interrupt"
+		}
+		return "interrupt"
+	}
+	switch mcause {
+	case 0:
+		return ""
+	case 2:
+		return "illegal instruction"
+	case 3:
+		return "breakpoint"
+	case 4:
+		return "load misaligned"
+	case 6:
+		return "store misaligned"
+	case 11:
+		return "environment call (M)"
+	}
+	return "exception"
 }
 
 func plainSpeed(s sim.Snapshot) string {

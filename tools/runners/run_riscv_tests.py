@@ -36,7 +36,8 @@ TB_FILE          = REPO_ROOT / 'raijin' / 'dv' / 'riscv_test_tb.v'
 RTL_FILES = [
     'regfile.v', 'decoder.v', 'control.v', 'alu.v',
     'branch_unit.v', 'pc_reg.v', 'imem.v', 'dmem.v',
-    'csr_file.v', 'uart_sim.v', 'm_unit.v', 'raijin_core.v',
+    'csr_file.v', 'uart_sim.v', 'm_unit.v', 'clint.v',
+    'raijin_core.v',
 ]
 
 # Map test name -> (source dir, gcc -march flag).

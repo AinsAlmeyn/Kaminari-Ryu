@@ -1,18 +1,18 @@
 // ============================================================================
 // raijin_api.cpp: extern "C" hourglass wrapper around the Verilated Raijin core.
 //
-// Phase 1 scope:
-//   - Lifecycle (create / destroy / reset).
-//   - load_hex: parse a $readmemh-format file into both IMEM and DMEM.
-//   - step: run cycles, halt early when tohost goes non-zero.
-//   - Introspection: PC, regfile, cycle count, instret (approx), DMEM read,
-//     halted flag, tohost word.
+// Surface:
+//   - Lifecycle: create / destroy / reset.
+//   - load_hex:  parse a $readmemh-format file into both IMEM and DMEM.
+//   - step:      run cycles, halt early when tohost goes non-zero.
+//   - Introspection: PC, regfile, cycle count, instret, DMEM read,
+//     halted flag, tohost word, CSR snapshot, instruction-class counters
+//     (legacy 7-slot bundle + extended v2 bundle with trap breakdown).
 //
-// Conventions match raijin/dv/riscv_test_tb.v:
-//   - 65536 words per memory (256 KB), set via Verilator -G defines.
+// Memory conventions:
+//   - 4 Mi-words per memory (16 MB), set via Verilator -GIMEM/DMEM_DEPTH_WORDS.
 //   - tohost at byte 0x1000 (word index 0x400) in DMEM.
-//   - Both memories are loaded with the same image so instruction fetches
-//     and data loads see one unified program image.
+//   - IMEM and DMEM share a common load image so the hex file covers both.
 // ============================================================================
 
 #include "raijin_api.h"
@@ -245,10 +245,33 @@ RAIJIN_API void raijin_get_regs(RaijinSim* sim, uint32_t out[32]) {
     for (int i = 1; i < 32; ++i) out[i] = regs[i];
 }
 
-RAIJIN_API void raijin_get_csrs(RaijinSim*, uint32_t out[8]) {
-    // CSR file's storage is not yet exposed via public_flat_rd. Phase 5 will
-    // add it (mstatus, mepc, mtvec, mcause, mtval, mscratch, mie, mip).
-    std::memset(out, 0, 8 * sizeof(uint32_t));
+RAIJIN_API void raijin_get_csrs(RaijinSim* sim, RaijinCsrSnapshot* out) {
+    if (!sim || !out) {
+        if (out) std::memset(out, 0, sizeof(*out));
+        return;
+    }
+    auto* r = sim->dut->rootp;
+
+    const uint32_t mstatus_mie  = r->raijin_core__DOT__csr_file_inst__DOT__mstatus_mie  ? 1u : 0u;
+    const uint32_t mstatus_mpie = r->raijin_core__DOT__csr_file_inst__DOT__mstatus_mpie ? 1u : 0u;
+    out->mstatus = (mstatus_mie << 3) | (mstatus_mpie << 7);
+
+    out->misa = 0x40001100u;   // matches csr_file.v MISA_VALUE (RV32 + I + M)
+
+    const uint32_t mie_msie = r->raijin_core__DOT__csr_file_inst__DOT__mie_msie ? 1u : 0u;
+    const uint32_t mie_mtie = r->raijin_core__DOT__csr_file_inst__DOT__mie_mtie ? 1u : 0u;
+    out->mie = (mie_msie << 3) | (mie_mtie << 7);
+
+    const uint32_t mtip = r->raijin_core__DOT__mtip ? 1u : 0u;
+    const uint32_t msip = r->raijin_core__DOT__msip ? 1u : 0u;
+    out->mip = (msip << 3) | (mtip << 7);
+
+    out->mtvec    = r->raijin_core__DOT__csr_file_inst__DOT__mtvec;
+    out->mepc     = r->raijin_core__DOT__csr_file_inst__DOT__mepc;
+    out->mcause   = r->raijin_core__DOT__csr_file_inst__DOT__mcause;
+    out->mtval    = r->raijin_core__DOT__csr_file_inst__DOT__mtval;
+    out->mscratch = r->raijin_core__DOT__csr_file_inst__DOT__mscratch;
+    out->mhartid  = 0u;
 }
 
 RAIJIN_API void raijin_read_dmem(RaijinSim* sim, uint32_t byte_addr,
@@ -283,6 +306,22 @@ RAIJIN_API void raijin_get_class_counters(RaijinSim* sim, uint64_t out[RAIJIN_NU
     out[4] = r->raijin_core__DOT__cnt_load;
     out[5] = r->raijin_core__DOT__cnt_store;
     out[6] = r->raijin_core__DOT__cnt_trap;
+}
+
+RAIJIN_API void raijin_get_class_counters_v2(RaijinSim* sim, uint64_t out[RAIJIN_NUM_CLASS_COUNTERS_V2]) {
+    if (!sim) { std::memset(out, 0, RAIJIN_NUM_CLASS_COUNTERS_V2 * sizeof(uint64_t)); return; }
+    auto* r = sim->dut->rootp;
+    out[0]  = r->raijin_core__DOT__cnt_mul;
+    out[1]  = r->raijin_core__DOT__cnt_branch_total;
+    out[2]  = r->raijin_core__DOT__cnt_branch_taken;
+    out[3]  = r->raijin_core__DOT__cnt_jump;
+    out[4]  = r->raijin_core__DOT__cnt_load;
+    out[5]  = r->raijin_core__DOT__cnt_store;
+    out[6]  = r->raijin_core__DOT__cnt_trap;
+    out[7]  = r->raijin_core__DOT__cnt_exception;
+    out[8]  = r->raijin_core__DOT__cnt_interrupt;
+    out[9]  = r->raijin_core__DOT__cnt_wfi;
+    out[10] = r->raijin_core__DOT__cnt_csr_access;
 }
 
 RAIJIN_API int raijin_uart_read(RaijinSim* sim, char* buf, int max) {

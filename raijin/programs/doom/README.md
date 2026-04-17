@@ -20,8 +20,11 @@ and translated to Doom's key codes.
 
 - **Will it run?** Yes, it boots, loads the WAD, and renders the title screen
   as ASCII art.
-- **Will it be playable?** The sim runs at ~1.3 MIPS, so each Doom tick is
-  slow. Treat it as a working slideshow, not a fragfest.
+- **Will it be playable?** The sim runs Doom at around 7-8 MIPS, the same
+  Verilator-bound ceiling as the other demos. Each Doom tick still needs
+  millions of cycles of rendering and game logic though, so the effective
+  frame rate is a handful per second. Treat it as a working slideshow,
+  not a fragfest.
 - **The point.** "Look — this CPU I designed runs the actual Doom binary
   loaded from the actual shareware WAD." That justifies the slowness.
 

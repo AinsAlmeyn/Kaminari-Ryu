@@ -50,22 +50,55 @@ RAIJIN_API int        raijin_halted(RaijinSim* sim);
 RAIJIN_API uint32_t   raijin_tohost(RaijinSim* sim);
 
 /* ---- introspection ----
- * out_regs:  x0..x31          (32 words)
- * out_csrs:  mstatus, mepc, mtvec, mcause, mtval, mscratch, mie, mip
+ * out_regs:  x0..x31   (32 words)
+ * out_csrs:  see RaijinCsrSnapshot below (live values from the CSR file)
  */
 RAIJIN_API uint32_t   raijin_get_pc(RaijinSim* sim);
 RAIJIN_API void       raijin_get_regs(RaijinSim* sim, uint32_t out_regs[32]);
-RAIJIN_API void       raijin_get_csrs(RaijinSim* sim, uint32_t out_csrs[8]);
+
+/* A tight snapshot of the machine-mode state that matters for both
+ * diagnostics and RTOS-style debugging. The host reads this by value.
+ * All reads are free of side effects on the Verilated model. */
+typedef struct RaijinCsrSnapshot {
+    uint32_t mstatus;
+    uint32_t misa;
+    uint32_t mie;
+    uint32_t mip;
+    uint32_t mtvec;
+    uint32_t mepc;
+    uint32_t mcause;
+    uint32_t mtval;
+    uint32_t mscratch;
+    uint32_t mhartid;
+} RaijinCsrSnapshot;
+
+RAIJIN_API void       raijin_get_csrs(RaijinSim* sim, RaijinCsrSnapshot* out);
+
 RAIJIN_API void       raijin_read_dmem(RaijinSim* sim, uint32_t byte_addr,
                                        uint8_t* buf, uint32_t len);
 RAIJIN_API uint64_t   raijin_cycle_count(RaijinSim* sim);
 RAIJIN_API uint64_t   raijin_instret(RaijinSim* sim);
 
 /* Hardware perfcounters: instruction-class breakdown.
- * out is filled with: [mul, branch_total, branch_taken, jump, load, store, trap].
+ * Legacy 7-counter API (mul, branch_total, branch_taken, jump, load, store, trap)
+ * is preserved for older host builds. New callers should use the v2 accessor
+ * which adds the breakdown of trap events plus a few more classes:
+ *   out[0]  mul           (mul/div instructions)
+ *   out[1]  branch_total  (all conditional branches, taken or not)
+ *   out[2]  branch_taken  (conditional branches that changed the PC)
+ *   out[3]  jump          (JAL + JALR)
+ *   out[4]  load          (LB/LH/LW and unsigned variants)
+ *   out[5]  store         (SB/SH/SW)
+ *   out[6]  trap          (total traps, = exception + interrupt)
+ *   out[7]  exception     (synchronous traps only)
+ *   out[8]  interrupt     (asynchronous machine-mode interrupts)
+ *   out[9]  wfi           (committed WFI instructions)
+ *   out[10] csr_access    (committed Zicsr instructions)
  */
-#define RAIJIN_NUM_CLASS_COUNTERS 7
+#define RAIJIN_NUM_CLASS_COUNTERS    7
+#define RAIJIN_NUM_CLASS_COUNTERS_V2 11
 RAIJIN_API void       raijin_get_class_counters(RaijinSim* sim, uint64_t out[RAIJIN_NUM_CLASS_COUNTERS]);
+RAIJIN_API void       raijin_get_class_counters_v2(RaijinSim* sim, uint64_t out[RAIJIN_NUM_CLASS_COUNTERS_V2]);
 
 /* ---- UART ----
  * raijin_uart_read drains up to `max` bytes from the TX ring buffer into

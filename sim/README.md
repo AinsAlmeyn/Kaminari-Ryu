@@ -17,8 +17,8 @@ This is the bridge between the hardware description (Verilog) and the software t
   ┌──────────────┐    ┌─────────────┐    ┌──────────────┐    ┌──────────────┐
   │ Verilog RTL  │───▶│  Verilator  │───▶│    CMake     │───▶│  raijin.dll  │
   │              │    │             │    │              │    │ libraijin.so │
-  │ 12 .v + 2.vh │    │  → C++      │    │  → LTO build │    │              │
-  │              │    │  cycle-     │    │  → strip     │    │  16 exported │
+  │ 13 .v + 2.vh │    │  → C++      │    │  → LTO build │    │              │
+  │              │    │  cycle-     │    │  → strip     │    │  17 exported │
   │              │    │  accurate   │    │  → link      │    │  C functions │
   └──────────────┘    └─────────────┘    └──────────────┘    └──────────────┘
 ```
@@ -35,7 +35,7 @@ The output is a self-contained shared library that exports a C API (`raijin_api.
 | File | Role |
 |------|------|
 | [`CMakeLists.txt`](CMakeLists.txt) | Build recipe. Invokes Verilator on the RTL, compiles the generated C++ with LTO and `-march=x86-64-v3`, statically links libstdc++/libgcc/winpthread on Windows so the DLL has zero external MinGW dependencies. |
-| [`raijin_api.h`](raijin_api.h) | Public C header. 16 functions across four groups: lifecycle, load/step, introspection, UART. |
+| [`raijin_api.h`](raijin_api.h) | Public C header. 17 functions across four groups: lifecycle, load/step, introspection, UART. |
 | [`raijin_api.cpp`](raijin_api.cpp) | Implementation. Wraps the Verilated model behind an opaque `RaijinSim*` handle, parses `.hex` files into memory, drives the cycle loop, extracts register and CSR state. |
 | [`dpi_hooks.cpp`](dpi_hooks.cpp) | DPI-C bridge for UART: host side of the TX ring buffer and the RX queue. When the simulated CPU writes to `0x1000_0000`, it calls into here, and the byte ends up in a host-side ring that `raijin_uart_read` drains. |
 
@@ -43,7 +43,7 @@ The output is a self-contained shared library that exports a C API (`raijin_api.
 
 ## The C API
 
-All 16 exported functions from [`raijin_api.h`](raijin_api.h), grouped by purpose. Every function is safe to call with a null `RaijinSim*` (returns zero or does nothing), so host languages don't need to worry about finalizer races.
+All 17 exported functions from [`raijin_api.h`](raijin_api.h), grouped by purpose. Every function is safe to call with a null `RaijinSim*` (returns zero or does nothing), so host languages don't need to worry about finalizer races.
 
 ### Lifecycle
 
@@ -68,11 +68,12 @@ All 16 exported functions from [`raijin_api.h`](raijin_api.h), grouped by purpos
 |----------|---------|
 | `raijin_get_pc(sim)` | Current program counter. |
 | `raijin_get_regs(sim, out)` | Fill `out[32]` with x0..x31. |
-| `raijin_get_csrs(sim, out)` | Fill `out[8]` with mstatus, mepc, mtvec, mcause, mtval, mscratch, mie, mip. |
+| `raijin_get_csrs(sim, out)` | Fill `*out` (a `RaijinCsrSnapshot`) with mstatus, misa, mie, mip, mtvec, mepc, mcause, mtval, mscratch, mhartid. |
 | `raijin_read_dmem(sim, addr, buf, len)` | Copy `len` bytes from data memory starting at `addr`. |
 | `raijin_cycle_count(sim)` | Total cycles executed since reset. |
 | `raijin_instret(sim)` | Retired instruction count (equals cycle count for single-cycle). |
-| `raijin_get_class_counters(sim, out)` | Fill `out[7]` with per-class counters: mul, branch_total, branch_taken, jump, load, store, trap. |
+| `raijin_get_class_counters(sim, out)` | Fill `out[7]` with the legacy per-class counters: mul, branch_total, branch_taken, jump, load, store, trap. |
+| `raijin_get_class_counters_v2(sim, out)` | Fill `out[11]` with the extended counters. Indices 0..6 match the legacy bundle; 7..10 add exceptions (sync traps only), interrupts (async only), committed WFI instructions, and Zicsr accesses. |
 
 ### UART
 

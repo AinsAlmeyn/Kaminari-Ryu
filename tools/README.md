@@ -89,7 +89,7 @@ These scripts need Python 3 and `riscv64-unknown-elf-gcc` (or `riscv-none-elf-gc
 ### Example: running the compliance suite
 
 ```
-$ python tools/runners/run_riscv_tests.py
+$ python tools/runners/run_riscv_tests.py --all
 
   rv32ui-p-add       PASS   (cycles: 382)
   rv32ui-p-addi      PASS   (cycles: 297)
@@ -100,8 +100,6 @@ $ python tools/runners/run_riscv_tests.py
   rv32um-p-mulh      PASS   (cycles: 277)
   rv32um-p-div       PASS   (cycles: 1089)
   ...
-  rv32mi-p-csr       PASS   (cycles: 198)
-  rv32mi-p-ma_fetch  PASS   (cycles: 412)
 
   summary: all tests passed
 ```
@@ -116,11 +114,10 @@ Upstream clone of [riscv-software-src/riscv-tests](https://github.com/riscv-soft
 |--------|--------|
 | `isa/rv32ui-*` | All 40 RV32I base integer instructions |
 | `isa/rv32um-*` | All 8 RV32M multiply and divide instructions |
-| `isa/rv32mi-*` | Machine-mode privileged instructions, Zicsr, and trap handling |
 
 Each test compiles down to a small program that exercises one or more instructions across many edge cases (signed and unsigned boundaries, division by zero, misaligned addresses, and so on) and writes 1 to `tohost` if every check passed.
 
-Raijin passes the full RV32I, RV32M, and Zicsr subsets.
+Raijin passes the full `rv32ui-p-*` and `rv32um-p-*` subsets. Zicsr and trap semantics are proven by the in-tree `zicsr_tb`, `timer_int_tb`, and `soft_int_tb` testbenches under [`raijin/dv/`](../raijin/dv/) rather than by the upstream `rv32mi-*` suite (which needs privileged-mode harness support we did not port).
 
 ---
 

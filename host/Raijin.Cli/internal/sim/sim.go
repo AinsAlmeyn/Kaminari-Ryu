@@ -35,14 +35,15 @@ var (
 	raijinHalted           func(uintptr) int32
 	raijinTohost           func(uintptr) uint32
 	raijinGetPc            func(uintptr) uint32
-	raijinGetRegs          func(uintptr, uintptr)
-	raijinGetCsrs          func(uintptr, uintptr)
-	raijinReadDmem         func(uintptr, uint32, uintptr, uint32)
-	raijinCycleCount       func(uintptr) uint64
-	raijinInstret          func(uintptr) uint64
-	raijinGetClassCounters func(uintptr, uintptr)
-	raijinUartRead         func(uintptr, uintptr, int32) int32
-	raijinUartWrite        func(uintptr, byte)
+	raijinGetRegs            func(uintptr, uintptr)
+	raijinGetCsrs            func(uintptr, uintptr)
+	raijinReadDmem           func(uintptr, uint32, uintptr, uint32)
+	raijinCycleCount         func(uintptr) uint64
+	raijinInstret            func(uintptr) uint64
+	raijinGetClassCounters   func(uintptr, uintptr)
+	raijinGetClassCountersV2 func(uintptr, uintptr)
+	raijinUartRead           func(uintptr, uintptr, int32) int32
+	raijinUartWrite          func(uintptr, byte)
 
 	dllLoaded bool
 )
@@ -65,6 +66,7 @@ func bindAll(handle uintptr) {
 	purego.RegisterLibFunc(&raijinCycleCount, handle, "raijin_cycle_count")
 	purego.RegisterLibFunc(&raijinInstret, handle, "raijin_instret")
 	purego.RegisterLibFunc(&raijinGetClassCounters, handle, "raijin_get_class_counters")
+	purego.RegisterLibFunc(&raijinGetClassCountersV2, handle, "raijin_get_class_counters_v2")
 	purego.RegisterLibFunc(&raijinUartRead, handle, "raijin_uart_read")
 	purego.RegisterLibFunc(&raijinUartWrite, handle, "raijin_uart_write")
 	dllLoaded = true
@@ -110,17 +112,56 @@ func (s *Sim) Regs() [32]uint32 {
 	return out
 }
 
-func (s *Sim) CSRs() [8]uint32 {
-	var out [8]uint32
-	raijinGetCsrs(s.h, uintptr(unsafe.Pointer(&out[0])))
-	return out
+// CSRSnapshot mirrors the C API's RaijinCsrSnapshot struct. Each field
+// is one 32-bit word, laid out in the same order as the C header so the
+// raw byte array raijin_get_csrs writes maps 1:1.
+type CSRSnapshot struct {
+	Mstatus  uint32
+	Misa     uint32
+	Mie      uint32
+	Mip      uint32
+	Mtvec    uint32
+	Mepc     uint32
+	Mcause   uint32
+	Mtval    uint32
+	Mscratch uint32
+	Mhartid  uint32
 }
 
-// ClassCounters returns [mul, branches_total, branches_taken, jumps, loads,
-// stores, traps]. Matches the sim's DLL ABI.
+// CSRs returns a live snapshot of every software-visible M-mode CSR that
+// Raijin currently implements. Safe to call at any time; reads are free
+// of side effects on the Verilated model.
+func (s *Sim) CSRs() CSRSnapshot {
+	var words [10]uint32
+	raijinGetCsrs(s.h, uintptr(unsafe.Pointer(&words[0])))
+	return CSRSnapshot{
+		Mstatus:  words[0],
+		Misa:     words[1],
+		Mie:      words[2],
+		Mip:      words[3],
+		Mtvec:    words[4],
+		Mepc:     words[5],
+		Mcause:   words[6],
+		Mtval:    words[7],
+		Mscratch: words[8],
+		Mhartid:  words[9],
+	}
+}
+
+// ClassCounters returns the legacy 7-slot counter bundle:
+// [mul, branches_total, branches_taken, jumps, loads, stores, traps].
+// New code should prefer ClassCountersV2.
 func (s *Sim) ClassCounters() [7]uint64 {
 	var out [7]uint64
 	raijinGetClassCounters(s.h, uintptr(unsafe.Pointer(&out[0])))
+	return out
+}
+
+// ClassCountersV2 is the extended 11-slot counter bundle. Indices 0-6
+// match ClassCounters; 7 onward add exception/interrupt/wfi/csr splits.
+func (s *Sim) ClassCountersV2() [11]uint64 {
+	var out [11]uint64
+	raijinGetClassCountersV2(s.h, uintptr(unsafe.Pointer(&out[0])))
 	return out
 }
 

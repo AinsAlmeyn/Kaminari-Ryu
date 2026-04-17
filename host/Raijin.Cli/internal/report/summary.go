@@ -169,8 +169,17 @@ func (m summaryModel) breakdown(w int) string {
 		{"stores", mix[5], lipgloss.Color("175"), ""},
 		{"jumps", mix[3], lipgloss.Color("244"), ""},
 	}
-	if mix[6] > 0 {
-		rows = append(rows, row{"traps", mix[6], theme.ColErr, ""})
+	if csr := m.snap.CsrAccess(); csr > 0 {
+		rows = append(rows, row{"CSR access", csr, lipgloss.Color("141"), ""})
+	}
+	if wfi := m.snap.WfiCommits(); wfi > 0 {
+		rows = append(rows, row{"WFI waits", wfi, lipgloss.Color("60"), ""})
+	}
+	if exc := m.snap.Exceptions(); exc > 0 {
+		rows = append(rows, row{"exceptions", exc, theme.ColErr, ""})
+	}
+	if intr := m.snap.Interrupts(); intr > 0 {
+		rows = append(rows, row{"interrupts", intr, lipgloss.Color("214"), mcauseName(m.snap.CSRs.Mcause)})
 	}
 
 	var b strings.Builder

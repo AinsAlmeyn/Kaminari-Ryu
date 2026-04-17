@@ -60,6 +60,7 @@ set(RTL_SOURCES
     ${RTL_DIR}/csr_file.v
     ${RTL_DIR}/uart_sim.v
     ${RTL_DIR}/m_unit.v
+    ${RTL_DIR}/clint.v
 )
 
 # ----------------------------------------------------------------------------

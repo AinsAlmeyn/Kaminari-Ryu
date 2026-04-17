@@ -2,8 +2,9 @@
 
 <div align="center">
 
-**The hardware.** Verilog source for the single-cycle RV32IM + Zicsr CPU,\
-its per-module testbenches, and the demo programs compiled to `.hex`.
+**The hardware.** Verilog source for the single-cycle RV32IM + Zicsr CPU
+with machine-timer interrupts, its per-module testbenches, and the demo
+programs compiled to `.hex`.
 
 </div>
 
@@ -15,8 +16,8 @@ Everything here is synthesizable RTL. A Verilator-based simulator in [`sim/`](..
 
 ```
 raijin/
-├── rtl/                 12 Verilog modules + 2 definition headers
-├── dv/                  13 testbenches
+├── rtl/                 13 Verilog modules + 2 definition headers
+├── dv/                  15 testbenches (9 unit + 5 integration + 1 harness)
 └── programs/            demo programs (source + precompiled .hex)
 ```
 
@@ -24,7 +25,7 @@ raijin/
 
 ## rtl
 
-The Verilog design. [`raijin_core.v`](rtl/raijin_core.v) is the top module. It instantiates 11 sub-modules and wires them together into a single-cycle datapath.
+The Verilog design. [`raijin_core.v`](rtl/raijin_core.v) is the top module. It instantiates 12 sub-modules and wires them together into a single-cycle datapath.
 
 ### Modules at a glance
 
@@ -40,7 +41,8 @@ The Verilog design. [`raijin_core.v`](rtl/raijin_core.v) is the top module. It i
 | **branch_unit** | [`branch_unit.v`](rtl/branch_unit.v) | 🟠 compute | Six branch conditions: BEQ, BNE, BLT, BGE, BLTU, BGEU. Always computes; the control unit decides when to use it. |
 | **dmem** | [`dmem.v`](rtl/dmem.v) | 🔵 memory | Data memory. 16 MB, byte/halfword/word access with alignment checks. |
 | **uart_sim** | [`uart_sim.v`](rtl/uart_sim.v) | 🔷 I/O | Memory-mapped UART at `0x1000_0000`. TX writes go out to host stdout, RX reads pull from host stdin via DPI. |
-| **csr_file** | [`csr_file.v`](rtl/csr_file.v) | 🟢 register | M-mode CSRs (mstatus, mtvec, mepc, mcause, mtval, mscratch, mcycle, minstret) and synchronous trap / MRET logic. |
+| **clint** | [`clint.v`](rtl/clint.v) | 🔷 I/O | SiFive-compatible timer + software-interrupt peripheral at `0x0200_0000`. Owns `msip`, `mtime`, `mtimecmp`; drives `mip.MSIP` and `mip.MTIP`. |
+| **csr_file** | [`csr_file.v`](rtl/csr_file.v) | 🟢 register | M-mode CSRs (mstatus, mie, mip, mtvec, mepc, mcause, mtval, mscratch, misa, mvendorid/marchid/mimpid/mhartid, mcycle/minstret, mhpmcounter3..6) plus trap entry, MRET and interrupt arbitration. |
 
 ### Definition headers
 
@@ -98,6 +100,8 @@ One testbench per module, plus two integration-level ones.
 | `zicsr_tb.v` | Zicsr instructions end to end: CSRRW/S/C plus the "no-write when rs1=0" spec rule. |
 | `coverage_tb.v` | Runs `programs/coverage_all.hex` which exercises every RV32I + M instruction at least once. |
 | `raijin_core_tb.v` | Integration: runs `programs/sum_1_to_5.hex` and checks final register/memory state. |
+| `timer_int_tb.v` | Integration: runs `programs/timer_int_test.hex` which programs mtimecmp, enables MTIE, and verifies that 10 machine-timer interrupts fire end to end. |
+| `soft_int_tb.v` | Integration: runs `programs/soft_int_test.hex` which raises MSIP via the CLINT and verifies the software-interrupt path (5 dispatches, no exceptions). |
 | `riscv_test_tb.v` | Generic harness for the official RISC-V compliance suite. Polls the `tohost` memory location; 1 = PASS, any other non-zero = FAIL. |
 
 > [!TIP]
@@ -117,6 +121,8 @@ Each demo ships both as source (C or assembly) and as a pre-compiled `.hex` that
 | `snake` | [`snake.c`](programs/snake.c) | Snake game with arrow-key input via UART RX. |
 | `donut` | [`donut.c`](programs/donut.c) | Spinning ASCII donut. Heavy trig plus float emulation, good stress test. |
 | `doom` | [`doom/`](programs/doom/) | 1993 id Software classic, ported via doomgeneric. See [`programs/doom/README.md`](programs/doom/README.md) for the port details. |
+| `timer_int_test` | [`timer_int_test.py`](programs/timer_int_test.py) | Hand-assembled demo that sets mtimecmp, enables MTIE, and counts 10 machine-timer traps. The generator script is self-contained (no cross-compiler needed) and emits the `.hex` directly. |
+| `soft_int_test` | [`soft_int_test.py`](programs/soft_int_test.py) | Hand-assembled demo that raises MSIP via the CLINT register, handles the trap, and re-raises until 5 software interrupts have fired. |
 
 ### The hex format
 
@@ -130,7 +136,7 @@ The simulator reads `.hex` files in `$readmemh` format: one 32-bit word per line
 ...
 ```
 
-The non-demo `.hex` files (`sum_1_to_5`, `coverage_all`, `zicsr_test`) exist only for the testbenches in `dv/`.
+The non-demo `.hex` files (`sum_1_to_5`, `coverage_all`, `zicsr_test`, `timer_int_test`, `soft_int_test`) exist only for the testbenches in `dv/`.
 
 ---
 
@@ -159,3 +165,23 @@ During that one cycle, every module evaluates combinationally. Two things are la
 > Single-cycle is the simplest design that actually works. It trades clock frequency for design clarity: the critical path runs through the entire datapath in one tick, which caps Fmax around 30 MHz on typical FPGAs. A pipeline would shorten that path and lift the ceiling, but at the cost of hazard detection, forwarding, and several more wires. For learning and simulation throughput, single-cycle is the right call.
 
 The detailed signal-level wiring is in [`raijin_core.v`](rtl/raijin_core.v), which is heavily commented. The project root [README](../README.md) has the module hierarchy overview.
+
+---
+
+## Revisions
+
+Raijin is developed as a single living codebase; historical snapshots live in git tags, not in parallel folders.
+
+- **`raijin-v1-baseline`** (historic): original single-cycle RV32IM + Zicsr core. No external interrupts, no CLINT, no WFI. 12 RTL modules.
+- **`raijin-v1.0`** (current `main`): the polished release. CLINT with `msip` + `mtimecmp` + `mtime`, full `mie`/`mip`/`misa`/identification CSRs, `mhpmcounter3..6`, machine-software and machine-timer interrupt paths, WFI, host-side counter v2 API (exception vs interrupt split, WFI commits, CSR access count), full 251-check testbench suite. 13 RTL modules.
+
+To A/B benchmark two revisions side by side:
+
+```bash
+git worktree add ../raijin-old raijin-v1-baseline
+cmake -S ../raijin-old/sim -B build/sim-old -G Ninja && cmake --build build/sim-old
+cmake -S sim             -B build/sim-new -G Ninja && cmake --build build/sim-new
+# two raijin.dll artifacts land in build/sim-{old,new}/bin/
+```
+
+The bench harness in [`../tools/bench-harness/`](../tools/bench-harness/) takes a `--dll` path so the same hex file can be timed against either build.

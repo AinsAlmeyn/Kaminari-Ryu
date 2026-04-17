@@ -1,23 +1,25 @@
 // ============================================================================
 // raijin_core.v: top-level single-cycle RV32I + Zicsr CPU
 // ----------------------------------------------------------------------------
-// Extensions over the pure-RV32I version:
+// v2 extensions over the baseline RV32IM single-cycle core:
 //
-//   * CSR file (csr_file.v)          - M-mode CSRs + trap / MRET bookkeeping
-//   * Zicsr instructions             - CSRRW/S/C and immediate variants
-//   * Synchronous exception path     - ECALL, EBREAK, illegal SYSTEM
-//   * MRET control-flow             . Returns to mepc, restores MIE
+//   * CLINT timer peripheral         - 64-bit mtime + mtimecmp, drives MTIP
+//   * Machine-timer interrupt path   - priority: interrupt > sync exception
+//   * WFI instruction                - implemented as NOP (spec-legal)
+//   * mie / mip / misa CSRs          - minimal machine-mode interrupt model
+//   * mhpmcounter3..6 CSRs           - software-visible event counters
+//   * RO identification CSRs         - mvendorid / marchid / mimpid / mhartid
 //
 // Trap / MRET PC-mux priority (highest first):
-//      trap_en  -> mtvec_out
+//      trap_en  -> mtvec_out         (sync exception OR interrupt)
 //      mret_en  -> mepc_out
 //      is_jalr  -> (rs1 + imm) & ~1
 //      is_jal
-//        or taken branch            -> alu_result
-//      default                      -> pc + 4
+//        or taken branch             -> alu_result
+//      default                       -> pc + 4
 //
 // Side-effect gating: while trapping, reg_write_en and mem_write_en are
-// squashed so the faulting instruction does not commit partial state.
+// squashed so the faulting / preempted instruction does not commit.
 // ============================================================================
 
 `include "riscv_defs.vh"
@@ -122,19 +124,18 @@ module raijin_core #(
     );
 
     // ====================================================================
-    // SYSTEM disambiguation. Decide which privileged op this is.
-    // inst[31:20] == csr_addr already carries the discriminator.
+    // SYSTEM disambiguation.
+    // inst[31:20] (== csr_addr wire) carries the discriminator.
+    //   0x000 -> ECALL    0x001 -> EBREAK   0x302 -> MRET   0x105 -> WFI
     // ====================================================================
     wire is_ecall        = is_system_priv && (csr_addr == 12'h000);
     wire is_ebreak       = is_system_priv && (csr_addr == 12'h001);
     wire is_mret         = is_system_priv && (csr_addr == 12'h302);
-    wire is_illegal_priv = is_system_priv && !(is_ecall || is_ebreak || is_mret);
+    wire is_wfi          = is_system_priv && (csr_addr == `PRIV_FIELD_WFI);
+    wire is_illegal_priv = is_system_priv && !(is_ecall || is_ebreak || is_mret || is_wfi);
 
     // ====================================================================
     // Misaligned data access detection.
-    //   funct3[1:0] = 00 -> byte   (always aligned)
-    //   funct3[1:0] = 01 -> half   (addr[0] must be 0)
-    //   funct3[1:0] = 10 -> word   (addr[1:0] must be 0)
     // ====================================================================
     wire [1:0] mem_addr_low  = alu_result[1:0];
     wire       access_is_word = (funct3[1:0] == 2'b10);
@@ -148,33 +149,56 @@ module raijin_core #(
     wire store_misaligned = mem_write_en_raw && addr_misaligned;
 
     // ====================================================================
-    // Trap detection + signal generation
+    // Async interrupt arbitration. Two machine-mode lines:
+    //   machine-software (msip)  enabled by mie.MSIE, reported in mip.MSIP
+    //   machine-timer    (mtip)  enabled by mie.MTIE, reported in mip.MTIP
+    // A line fires only when globally enabled (mstatus.MIE) AND individually
+    // enabled (mie.*IE) AND the incoming line is asserted. If both fire in
+    // the same cycle the RISC-V spec gives machine-software higher priority
+    // than machine-timer; we follow that for mcause arbitration below.
+    // Interrupts always win over synchronous exceptions.
     // ====================================================================
-    wire trap_en = is_ecall | is_ebreak | is_illegal_priv
-                 | load_misaligned | store_misaligned;
+    wire mtip  /* verilator public_flat_rd */;
+    wire msip  /* verilator public_flat_rd */;
+    wire mstatus_mie_out;
+    wire mie_mtie_out;
+    wire mie_msie_out;
+    wire take_soft_interrupt  = mstatus_mie_out & mie_msie_out & msip;
+    wire take_timer_interrupt = mstatus_mie_out & mie_mtie_out & mtip;
+    wire take_interrupt       = take_soft_interrupt | take_timer_interrupt;
+
+    // ====================================================================
+    // Synchronous exception detection
+    // ====================================================================
+    wire sync_exception =
+           is_ecall | is_ebreak | is_illegal_priv
+         | load_misaligned | store_misaligned;
+
+    wire trap_en = take_interrupt | sync_exception;
 
     reg [31:0] trap_cause;
     always @(*) begin
-        // Priority: misalignments before ecall/ebreak/illegal so that a
-        // bad address in a SYSTEM-adjacent instruction still reports the
-        // correct cause.
-        if      (load_misaligned)  trap_cause = `MCAUSE_LOAD_MISALIGNED;
-        else if (store_misaligned) trap_cause = `MCAUSE_STORE_MISALIGNED;
-        else if (is_ecall)         trap_cause = `MCAUSE_ECALL_FROM_M;
-        else if (is_ebreak)        trap_cause = `MCAUSE_BREAKPOINT;
-        else                       trap_cause = `MCAUSE_ILLEGAL_INSTR;
+        // Interrupts win over synchronous exceptions. Among interrupts,
+        // machine-software outranks machine-timer.
+        if (take_soft_interrupt)         trap_cause = `MCAUSE_M_SOFT_INTERRUPT;
+        else if (take_timer_interrupt)   trap_cause = `MCAUSE_M_TIMER_INTERRUPT;
+        else if (load_misaligned)        trap_cause = `MCAUSE_LOAD_MISALIGNED;
+        else if (store_misaligned)       trap_cause = `MCAUSE_STORE_MISALIGNED;
+        else if (is_ecall)               trap_cause = `MCAUSE_ECALL_FROM_M;
+        else if (is_ebreak)              trap_cause = `MCAUSE_BREAKPOINT;
+        else                             trap_cause = `MCAUSE_ILLEGAL_INSTR;
     end
 
     wire [31:0] trap_pc = pc;
 
-    // mtval captures the faulting address on a memory misalignment.
-    // For other synchronous exceptions we leave it at zero (WARL-legal).
+    // mtval rules: capture faulting address on memory misalignment, 0 for
+    // interrupts and other synchronous causes (WARL-legal).
     reg [31:0] trap_tval;
     always @(*) begin
-        if (load_misaligned || store_misaligned)
-            trap_tval = alu_result;
-        else
-            trap_tval = 32'b0;
+        if (take_interrupt)                    trap_tval = 32'b0;
+        else if (load_misaligned
+              || store_misaligned)             trap_tval = alu_result;
+        else                                   trap_tval = 32'b0;
     end
 
     // ====================================================================
@@ -183,8 +207,6 @@ module raijin_core #(
     wire [31:0] rs1_data, rs2_data;
     reg  [31:0] wb_data;
 
-    // Mask register writes during a trap so the faulting instruction
-    // does not commit.
     wire reg_write_en = reg_write_en_raw & ~trap_en;
 
     regfile regfile_inst (
@@ -237,8 +259,7 @@ module raijin_core #(
     );
 
     // ====================================================================
-    // M extension execution unit (mul + div). Runs in parallel with the
-    // ALU; is_m_op selects its result over the ALU's at writeback time.
+    // M extension execution unit
     // ====================================================================
     wire [31:0] m_result;
 
@@ -263,21 +284,29 @@ module raijin_core #(
 
     // ====================================================================
     // Data-bus address decode
-    //   0x1xxx_xxxx -> UART MMIO
-    //   anything else -> DMEM
-    // The decode is purely combinational; only the path that wins gets
-    // its write_en asserted.
+    //   0x1xxx_xxxx          -> UART MMIO
+    //   0x0200_xxxx           -> CLINT (timer)
+    //   anything else         -> DMEM
     // ====================================================================
     wire is_uart_addr  = (alu_result[31:28] == 4'h1);
-    wire is_dmem_addr  = ~is_uart_addr;
+    wire is_clint_addr = (alu_result[31:16] == 16'h0200);
+    wire is_dmem_addr  = ~is_uart_addr & ~is_clint_addr;
 
-    wire mem_write_en      = mem_write_en_raw & ~trap_en;
-    wire dmem_write_en_eff = mem_write_en & is_dmem_addr;
-    wire uart_write_en_eff = mem_write_en & is_uart_addr;
+    wire mem_write_en       = mem_write_en_raw & ~trap_en;
+    wire dmem_write_en_eff  = mem_write_en & is_dmem_addr;
+    wire uart_write_en_eff  = mem_write_en & is_uart_addr;
+    wire clint_write_en_eff = mem_write_en & is_clint_addr;
 
     wire [31:0] dmem_read_data;
     wire [31:0] uart_read_data;
-    wire [31:0] mem_read_data = is_uart_addr ? uart_read_data : dmem_read_data;
+    wire [31:0] clint_read_data;
+
+    reg [31:0] mem_read_data;
+    always @(*) begin
+        if      (is_uart_addr)  mem_read_data = uart_read_data;
+        else if (is_clint_addr) mem_read_data = clint_read_data;
+        else                    mem_read_data = dmem_read_data;
+    end
 
     dmem #(
         .DEPTH_WORDS (DMEM_DEPTH_WORDS),
@@ -302,11 +331,21 @@ module raijin_core #(
         .read_data  (uart_read_data)
     );
 
+    clint clint_inst (
+        .clk        (clk),
+        .reset      (reset),
+        .cs         (is_clint_addr),
+        .read_en    (mem_read_en & is_clint_addr),
+        .write_en   (clint_write_en_eff),
+        .addr       (alu_result),
+        .write_data (rs2_data),
+        .read_data  (clint_read_data),
+        .mtip       (mtip),
+        .msip       (msip)
+    );
+
     // ====================================================================
     // CSR write source mux + "no-write" suppression
-    //   CSRRS / CSRRC with rs1==x0 (or CSRRSI/CSRRCI with zimm==0) must
-    //   NOT update the CSR (spec 9.1). The rs1 FIELD is the discriminator
-    //   for both register and immediate variants since it doubles as zimm.
     // ====================================================================
     wire [31:0] csr_wdata     = csr_src_sel ? zimm : rs1_data;
     wire        csr_src_zero  = (rs1 == 5'd0);
@@ -318,28 +357,51 @@ module raijin_core #(
     wire [31:0] mtvec_out;
     wire [31:0] mepc_out;
 
+    // Event counters are defined below; forward declare wire views.
+    // cnt_trap is kept for backward compatibility and always equals
+    // cnt_exception + cnt_interrupt. cnt_wfi counts committed WFI
+    // instructions so a host can tell idle-loop time from busy cycles.
+    reg [63:0] cnt_mul          /* verilator public_flat_rd */;
+    reg [63:0] cnt_branch_total /* verilator public_flat_rd */;
+    reg [63:0] cnt_branch_taken /* verilator public_flat_rd */;
+    reg [63:0] cnt_jump         /* verilator public_flat_rd */;
+    reg [63:0] cnt_load         /* verilator public_flat_rd */;
+    reg [63:0] cnt_store        /* verilator public_flat_rd */;
+    reg [63:0] cnt_trap         /* verilator public_flat_rd */;
+    reg [63:0] cnt_exception    /* verilator public_flat_rd */;
+    reg [63:0] cnt_interrupt    /* verilator public_flat_rd */;
+    reg [63:0] cnt_wfi          /* verilator public_flat_rd */;
+    reg [63:0] cnt_csr_access   /* verilator public_flat_rd */;
+
     csr_file csr_file_inst (
-        .clk           (clk),
-        .reset         (reset),
-        .csr_access_en (csr_access_en),
-        .csr_addr      (csr_addr),
-        .csr_op        (csr_op),
-        .csr_wdata     (csr_wdata),
-        .csr_write_en  (csr_write_en),
-        .csr_rdata     (csr_rdata),
-        .trap_en       (trap_en),
-        .trap_cause    (trap_cause),
-        .trap_pc       (trap_pc),
-        .trap_tval     (trap_tval),
-        .mret_en       (is_mret),
-        .mtvec_out     (mtvec_out),
-        .mepc_out      (mepc_out)
+        .clk               (clk),
+        .reset             (reset),
+        .csr_access_en     (csr_access_en),
+        .csr_addr          (csr_addr),
+        .csr_op            (csr_op),
+        .csr_wdata         (csr_wdata),
+        .csr_write_en      (csr_write_en),
+        .csr_rdata         (csr_rdata),
+        .trap_en           (trap_en),
+        .trap_cause        (trap_cause),
+        .trap_pc           (trap_pc),
+        .trap_tval         (trap_tval),
+        .mret_en           (is_mret),
+        .mtvec_out         (mtvec_out),
+        .mepc_out          (mepc_out),
+        .mtip_in           (mtip),
+        .msip_in           (msip),
+        .mstatus_mie_out   (mstatus_mie_out),
+        .mie_mtie_out      (mie_mtie_out),
+        .mie_msie_out      (mie_msie_out),
+        .hpm_branch_taken  (cnt_branch_taken),
+        .hpm_load          (cnt_load),
+        .hpm_store         (cnt_store),
+        .hpm_mul           (cnt_mul)
     );
 
     // ====================================================================
-    // Writeback mux. Extended with WB_SRC_CSR for Zicsr.
-    // RV32M results override the regular wb_src_sel decode: when an M-op
-    // is in flight, m_unit's result wins over whatever the ALU produced.
+    // Writeback mux.
     // ====================================================================
     always @(*) begin
         if (is_m_op) begin
@@ -356,7 +418,10 @@ module raijin_core #(
     end
 
     // ====================================================================
-    // Next-PC mux. Trap and MRET take priority over everything else
+    // Next-PC mux.
+    // Trap (interrupt OR exception) and MRET take priority over everything.
+    // WFI is treated as NOP: pc advances by 4 if no interrupt is pending,
+    // otherwise the interrupt path already redirects via trap_en.
     // ====================================================================
     wire is_jalr_instr = jump && (opcode == `OPCODE_JUMP_AND_LINK_REG);
     wire is_jal_instr  = jump && (opcode == `OPCODE_JUMP_AND_LINK);
@@ -376,20 +441,10 @@ module raijin_core #(
     end
 
     // ====================================================================
-    // Hardware performance counters. Each one increments by 1 per cycle in
-    // which an instruction of the named class commits. They are inspired
-    // by the RISC-V hpmcounter*'s but exposed directly via Verilator's
-    // public_flat_rd to the host so the dashboard can render an instruction
-    // mix breakdown without pulling raw CSR reads.
+    // Hardware performance counters (core-side).
+    //   cnt_branch_taken, cnt_load, cnt_store, cnt_mul are also read as
+    //   mhpmcounter3..6 via the CSR file.
     // ====================================================================
-    reg [63:0] cnt_mul          /* verilator public_flat_rd */;
-    reg [63:0] cnt_branch_total /* verilator public_flat_rd */;
-    reg [63:0] cnt_branch_taken /* verilator public_flat_rd */;
-    reg [63:0] cnt_jump         /* verilator public_flat_rd */;
-    reg [63:0] cnt_load         /* verilator public_flat_rd */;
-    reg [63:0] cnt_store        /* verilator public_flat_rd */;
-    reg [63:0] cnt_trap         /* verilator public_flat_rd */;
-
     always @(posedge clk) begin
         if (reset) begin
             cnt_mul          <= 64'b0;
@@ -399,14 +454,22 @@ module raijin_core #(
             cnt_load         <= 64'b0;
             cnt_store        <= 64'b0;
             cnt_trap         <= 64'b0;
+            cnt_exception    <= 64'b0;
+            cnt_interrupt    <= 64'b0;
+            cnt_wfi          <= 64'b0;
+            cnt_csr_access   <= 64'b0;
         end else begin
-            if (is_m_op)                  cnt_mul          <= cnt_mul          + 64'd1;
-            if (branch)                   cnt_branch_total <= cnt_branch_total + 64'd1;
-            if (branch && branch_taken)   cnt_branch_taken <= cnt_branch_taken + 64'd1;
-            if (jump)                     cnt_jump         <= cnt_jump         + 64'd1;
-            if (mem_read_en)              cnt_load         <= cnt_load         + 64'd1;
-            if (mem_write_en_raw)         cnt_store        <= cnt_store        + 64'd1;
-            if (trap_en)                  cnt_trap         <= cnt_trap         + 64'd1;
+            if (is_m_op && !trap_en)                  cnt_mul          <= cnt_mul          + 64'd1;
+            if (branch && !trap_en)                   cnt_branch_total <= cnt_branch_total + 64'd1;
+            if (branch && branch_taken && !trap_en)   cnt_branch_taken <= cnt_branch_taken + 64'd1;
+            if (jump && !trap_en)                     cnt_jump         <= cnt_jump         + 64'd1;
+            if (mem_read_en && !trap_en)              cnt_load         <= cnt_load         + 64'd1;
+            if (mem_write_en_raw && !trap_en)         cnt_store        <= cnt_store        + 64'd1;
+            if (is_wfi && !trap_en)                   cnt_wfi          <= cnt_wfi          + 64'd1;
+            if (csr_access_en && !trap_en)            cnt_csr_access   <= cnt_csr_access   + 64'd1;
+            if (trap_en)                              cnt_trap         <= cnt_trap         + 64'd1;
+            if (trap_en &&  take_interrupt)           cnt_interrupt    <= cnt_interrupt    + 64'd1;
+            if (trap_en && !take_interrupt)           cnt_exception    <= cnt_exception    + 64'd1;
         end
     end
 

@@ -28,13 +28,14 @@ The goal was never to build production silicon. The goal was to open up a CPU, u
 
 | | |
 |---|---|
-| **ISA** | RISC-V RV32IM + Zicsr (55 instructions) |
+| **ISA** | RISC-V RV32IM + Zicsr + WFI (56 instructions) |
 | **Design** | Single-cycle (every instruction completes in 1 clock tick) |
 | **Registers** | 32 general-purpose, 32-bit (x0 hardwired to zero) |
 | **Memory** | 16 MB instruction (ROM) + 16 MB data (RAM), Harvard layout |
-| **I/O** | Memory-mapped UART at `0x1000_0000` (serial byte stream to terminal) |
-| **Exceptions** | ECALL, EBREAK, illegal instruction, misaligned load/store |
-| **Verification** | Full RISC-V compliance suite + 13 unit testbenches |
+| **I/O** | Memory-mapped UART at `0x1000_0000`, CLINT timer at `0x0200_0000` |
+| **Traps** | ECALL, EBREAK, illegal instruction, misaligned load/store, machine-software interrupt, machine-timer interrupt |
+| **Privileged CSRs** | mstatus, mie, mip, mtvec, mepc, mcause, mtval, mscratch, misa, mhartid/mvendorid/marchid/mimpid, mcycle/minstret, mhpmcounter3..6 |
+| **Verification** | 15 testbenches (9 unit + 5 integration + 1 compliance harness), 251 self-checks, plus the `rv32ui-p-*` + `rv32um-p-*` riscv-tests suites |
 | **Simulated speed** | ~8 MIPS on modern x86 (Verilator-compiled C++) |
 | **FPGA estimate** | ~30 MHz (from critical path analysis) |
 
@@ -46,7 +47,7 @@ The goal was never to build production silicon. The goal was to open up a CPU, u
 <summary><b>Interactive TUI menu</b></summary>
 
 ```
-  ⚡ RAIJIN   v0.2.0                              RV32IM · single-cycle · 32 MB
+  ⚡ RAIJIN   v0.2.4                              RV32IM · single-cycle · 32 MB
 
   ▸ run doom                                                          ● ready
     run matrix                                                        ● ready
@@ -69,23 +70,25 @@ The goal was never to build production silicon. The goal was to open up a CPU, u
 <summary><b>Benchmark output (50M cycles)</b></summary>
 
 ```
-$ raijin run matrix --max-cycles 50000000 --quiet
+$ raijin bench matrix --max-cycles 50000000
 
  Summary
   program           matrix.hex
   result            STOPPED
-  runtime           6.1 s
+  runtime           6.4 s
   cycles            50.00M
   instructions      50.00M
-  avg speed         8.2 MIPS
+  avg speed         7.8 MIPS
   memory used       16.0 KB / 32.00 MB
 
  Instruction mix
-  multiply/divide       27.1K    0.1%
-  branches             16.49M   33.0%  100% taken
-  loads                 70.3K    0.1%
-  stores               151.4K    0.3%
-  jumps                  3.9K    0.0%
+  multiply/divide       17.7K    0.0%
+  branches             16.54M   33.1%  99% taken
+  loads                 56.5K    0.1%
+  stores               102.8K    0.2%
+  jumps                  5.1K    0.0%
+  CSR reads/writes     16.47M   32.9%
+  WFI commits               0    0.0%
 ```
 
 </details>
@@ -186,7 +189,7 @@ xattr -d com.apple.quarantine ./raijin ./libraijin.dylib
 
 ### Inside raijin_core
 
-The CPU is a single Verilog module ([`raijin_core.v`](raijin/rtl/raijin_core.v)) that wires together 11 sub-modules. Every instruction completes in exactly one clock tick. The data flows left to right; only the program counter and register file update on the clock edge.
+The CPU is a single Verilog module ([`raijin_core.v`](raijin/rtl/raijin_core.v)) that wires together 12 sub-modules. Every instruction completes in exactly one clock tick. The combinational path flows left to right within one cycle. State flops (PC, register file, data memory write port, CSR file, CLINT counters, UART) commit on the rising clock edge.
 
 ```
   ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌──────────┐
@@ -194,8 +197,8 @@ The CPU is a single Verilog module ([`raijin_core.v`](raijin/rtl/raijin_core.v))
   │         │    │         │    │         │    │         │    │          │
   │ pc_reg  │    │decoder  │    │ alu     │    │ dmem    │    │ wb mux   │
   │ imem    │    │control  │    │ m_unit  │    │uart_sim │    │  ↓       │
-  │         │    │regfile  │    │ branch  │    │         │    │ regfile  │
-  │         │    │ (read)  │    │ csr     │    │         │    │ (write)  │
+  │         │    │regfile  │    │ branch  │    │ clint   │    │ regfile  │
+  │         │    │ (read)  │    │ csr_file│    │         │    │ (write)  │
   └─────────┘    └─────────┘    └─────────┘    └─────────┘    └──────────┘
        ▲                                                            │
        │                    next_pc (feedback)                      │
@@ -204,9 +207,7 @@ The CPU is a single Verilog module ([`raijin_core.v`](raijin/rtl/raijin_core.v))
 ```
 
 > [!NOTE]
-> This is a **single-cycle** design: there are no pipeline stages or stalls. The boxes above are logical groupings, not clock boundaries. All 11 modules evaluate combinationally within the same cycle.
-
-The detailed D2 source for a full signal-level diagram is available at [`scripts/raijin-architecture.d2`](scripts/raijin-architecture.d2) for anyone who wants the wiring details.
+> This is a **single-cycle** design: there are no pipeline stages or stalls. The boxes above are logical groupings, not clock boundaries. Every instruction is fetched, decoded, executed, and written back within one clock cycle.
 
 The program counter priority logic from [`raijin_core.v`](raijin/rtl/raijin_core.v):
 
@@ -262,6 +263,10 @@ endcase
               │                              │
   0x00FF_FFFF └──────────────────────────────┘
                           ...
+  0x0200_0000 ┌──────────────────────────────┐
+              │   CLINT                      │  msip + mtimecmp + mtime
+  0x0200_BFFF └──────────────────────────────┘
+                          ...
   0x1000_0000 ┌──────────────────────────────┐
               │   UART Registers (MMIO)      │  4 registers, 16 bytes
   0x1000_000F └──────────────────────────────┘
@@ -271,6 +276,9 @@ endcase
 |---|---|---|---|
 | `0x0000_0000`..`0x00FF_FFFF` | Instruction memory | Read-only | 16 MB, word-addressed via `pc[31:2]`. Loaded from `.hex` at startup. |
 | `0x0000_0000`..`0x00FF_FFFF` | Data memory | Read/Write | 16 MB, byte/halfword/word. Same address space as IMEM (unified load image). |
+| `0x0200_0000` | CLINT `msip` | Read/Write | Bit 0 is the machine-software interrupt pending latch. Write 1 to raise, 0 to clear. |
+| `0x0200_4000`..`0x0200_4007` | CLINT `mtimecmp` | Read/Write | 64-bit compare register (low then high word). Arm the timer by writing here. |
+| `0x0200_BFF8`..`0x0200_BFFF` | CLINT `mtime` | Read/Write | 64-bit free-running timer. Ticks once per core clock in this sim. |
 | `0x1000_0000` | UART TX | Write | Emit one byte to the host terminal. |
 | `0x1000_0004` | UART status | Read | Always returns 1 (TX ready). |
 | `0x1000_0008` | UART RX data | Read | Latched byte from host keyboard. |
@@ -341,7 +349,7 @@ Division by zero: DIV returns -1, DIVU returns 2^32-1. Signed overflow (`INT_MIN
 </details>
 
 <details>
-<summary><b>Zicsr + privileged (7 instructions)</b></summary>
+<summary><b>Zicsr + privileged (8 instructions)</b></summary>
 
 | Instruction | Operation |
 |---|---|
@@ -349,10 +357,17 @@ Division by zero: DIV returns -1, DIVU returns 2^32-1. Signed overflow (`INT_MIN
 | `CSRRS / CSRRSI` | atomic read-set bits in CSR |
 | `CSRRC / CSRRCI` | atomic read-clear bits in CSR |
 | `MRET` | return from machine-mode trap (restores PC and interrupt enable) |
+| `WFI` | wait for interrupt. Spec-legal NOP in Raijin (a pipelined successor could gate the clock here) |
 
-**Implemented CSRs:** `mstatus` (MIE/MPIE), `mtvec` (trap vector), `mepc` (exception PC), `mcause` (exception cause), `mtval` (faulting value), `mscratch`, `mcycle`/`mcycleh` (cycle counter), `minstret`/`minstreth` (retired instruction counter), `mhartid` (always 0).
+**Implemented CSRs:**
 
-**Exception causes:** illegal instruction (2), breakpoint (3), load misaligned (4), store misaligned (6), environment call (11).
+- control: `mstatus` (MIE/MPIE), `mie` (MTIE), `mip` (MTIP, read-only), `mtvec`, `mepc`, `mcause`, `mtval`, `mscratch`
+- identification: `misa` (`0x40001100` = RV32 + I + M), `mvendorid`, `marchid`, `mimpid`, `mhartid` (all RAZ on this core)
+- counters: `mcycle`/`mcycleh`, `minstret`/`minstreth`, `mhpmcounter3..6` (taken-branch, load, store, mul events)
+
+**Trap causes:** illegal instruction (2), breakpoint (3), load misaligned (4), store misaligned (6), environment call from M-mode (11), machine-software interrupt (`0x8000_0003`, async), machine-timer interrupt (`0x8000_0007`, async). Interrupts win over synchronous exceptions; among interrupts, machine-software outranks machine-timer per spec.
+
+**CLINT at `0x0200_0000`:** SiFive-compatible layout with `msip` at offset `0x0`, `mtimecmp` at `+0x4000`, and `mtime` at `+0xBFF8`. Software raises a machine-software interrupt by writing 1 to `msip`, arms the timer by writing `mtimecmp`, and clears either pending line by writing 0 to the respective register.
 
 </details>
 
@@ -471,7 +486,7 @@ cd host/Raijin.Cli && chmod +x build.sh && ./build.sh
   ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌──────────┐
   │ VERILOG │───▶│VERILATOR│───▶│  CMAKE  │───▶│ GO CLI  │───▶│TERMINAL  │
   │         │    │         │    │         │    │         │    │          │
-  │ 12 .v   │    │ compiles│    │ builds  │    │ loads   │    │ keyboard │
+  │ 13 .v   │    │ compiles│    │ builds  │    │ loads   │    │ keyboard │
   │ modules │    │ to C++  │    │ shared  │    │ library │    │ + screen │
   │         │    │         │    │ library │    │ via     │    │          │
   │         │    │         │    │ .dll/so │    │ purego  │    │ UART I/O │
@@ -492,13 +507,13 @@ cd host/Raijin.Cli && chmod +x build.sh && ./build.sh
 ```
 Kaminari-Ryu/
 ├── raijin/
-│   ├── rtl/              12 Verilog modules + 2 definition headers
-│   ├── dv/               13 testbenches (unit + integration)
+│   ├── rtl/              13 Verilog modules + 2 definition headers
+│   ├── dv/               15 testbenches (9 unit + 5 integration + 1 harness)
 │   └── programs/         demos: source (.c/.s) and precompiled (.hex)
 │
 ├── sim/
 │   ├── CMakeLists.txt    Verilator build: Verilog → C++ → shared library
-│   ├── raijin_api.cpp    C API (16 exported functions)
+│   ├── raijin_api.cpp    C API (17 exported functions)
 │   └── dpi_hooks.cpp     UART bridge (DPI: simulator ↔ host I/O)
 │
 ├── host/Raijin.Cli/      Go CLI (cross-platform, no cgo)

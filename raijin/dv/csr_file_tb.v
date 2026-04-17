@@ -145,8 +145,9 @@ module csr_file_tb;
         // Unimplemented CSR reads as zero
         // ============================================================
         $display("\n[Test] unimplemented CSR reads as zero");
-        csr_do_read(12'hC00);   // cycle counter -- we don't implement
-        check("CSR 0xC00 = 0", csr_rdata, 32'd0);
+        // mhpmcounter10 (0xC0A) is outside the set Raijin backs; should RAZ.
+        csr_do_read(12'hC0A);
+        check("CSR 0xC0A = 0 (unimplemented)", csr_rdata, 32'd0);
 
         // ============================================================
         // CSRRW basic: write, then read back

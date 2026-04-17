@@ -128,6 +128,8 @@ func (se *Session) Snapshot() Snapshot {
 		MemoryCapacity:  MemoryCapacityBytes,
 		RunTime:         now.Sub(se.startWall),
 		Mix:             se.S.ClassCounters(),
+		MixV2:           se.S.ClassCountersV2(),
+		CSRs:            se.S.CSRs(),
 		SampledAt:       now,
 	}
 }
@@ -145,9 +147,18 @@ type Snapshot struct {
 	StackBytesUsed uint32
 	MemoryCapacity uint32
 	RunTime        time.Duration
-	Mix            [7]uint64   // [mul, br_total, br_taken, jumps, loads, stores, traps]
+	Mix            [7]uint64  // [mul, br_total, br_taken, jumps, loads, stores, traps]
+	MixV2          [11]uint64 // adds [..., exceptions, interrupts, wfi, csr_access]
+	CSRs           CSRSnapshot
 	SampledAt      time.Time
 }
+
+// Extended-counter accessors. Indices 7..10 of MixV2 are only populated
+// against a v2 DLL; older builds leave them zero.
+func (s Snapshot) Exceptions() uint64 { return s.MixV2[7] }
+func (s Snapshot) Interrupts() uint64 { return s.MixV2[8] }
+func (s Snapshot) WfiCommits() uint64 { return s.MixV2[9] }
+func (s Snapshot) CsrAccess()  uint64 { return s.MixV2[10] }
 
 // MemoryUsedBytes sums program image + dynamic stack.
 func (s Snapshot) MemoryUsedBytes() uint32 {

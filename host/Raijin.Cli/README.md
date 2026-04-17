@@ -16,7 +16,7 @@ This is what end users actually install and run. Cross-platform Go, no cgo: the 
 Running `raijin` with no arguments opens the interactive menu:
 
 ```
-  ⚡ RAIJIN   v0.2.0                              RV32IM · single-cycle · 32 MB
+  ⚡ RAIJIN   v0.2.4                              RV32IM · single-cycle · 32 MB
 
   ▸ run doom                                                          ● ready
     run matrix                                                        ● ready
@@ -102,7 +102,7 @@ The OS dynamic loader APIs differ between Windows and Unix, so `internal/sim/` i
 
 | File | Build tag | What it does |
 |------|-----------|--------------|
-| [`sim.go`](internal/sim/sim.go) | any | Shared types (`Sim` handle), function pointer declarations, `bindAll()` helper that registers the 16 C functions via purego, and the public Go wrappers. |
+| [`sim.go`](internal/sim/sim.go) | any | Shared types (`Sim` handle, `CSRSnapshot` struct), function pointer declarations, `bindAll()` helper that registers the 17 C functions via purego, and the public Go wrappers. |
 | [`loader_windows.go`](internal/sim/loader_windows.go) | `windows` | Uses `windows.LoadLibrary` to open `raijin.dll`. Looks next to the exe first, then the system PATH. Recognizes Windows error 126 (missing dependency) and prints a clear hint. |
 | [`loader_unix.go`](internal/sim/loader_unix.go) | `!windows` | Uses `purego.Dlopen` to open `libraijin.so` on Linux or `libraijin.dylib` on macOS. Similar error diagnostics for missing files or failed loads. |
 

@@ -40,28 +40,32 @@ func printInfo() {
 
 	// ARCHITECTURE section
 	section("architecture", innerW)
-	kvRow("ISA",        "RV32IM + Zicsr",    "hardware multiplier/divider")
-	kvRow("pipeline",   "single-cycle",      "one instruction per clock")
-	kvRow("CSR set",    "M-mode subset",     "+ mcycle/minstret free-running counters")
-	kvRow("trap model", "synchronous only",  "ECALL · EBREAK · illegal · misalign")
+	kvRow("ISA",          "RV32IM + Zicsr + WFI", "56 instructions, hardware multiplier/divider")
+	kvRow("pipeline",     "single-cycle",         "one instruction per clock")
+	kvRow("privileged",   "M-mode",               "mstatus, mie, mip, mtvec, mepc, mcause, mtval, mscratch")
+	kvRow("identifiers",  "misa + IDs",           "misa = 0x40001100 (RV32IM); vendor/arch/impl/hart RAZ")
+	kvRow("trap causes",  "6 sync + 2 async",     "ECALL · EBREAK · illegal · misalign L/S · MTI · MSI")
 
 	// MEMORY section
 	section("memory map", innerW)
-	memRow("instruction mem", "16 MB", "fetched by PC",          theme.ColAccent)
-	memRow("data memory",     "16 MB", "load/store + heap/stack", lipgloss.Color("108"))
-	memRow("UART TX",         "mmio",  "0x10000000",              lipgloss.Color("173"))
+	memRow("instruction mem", "16 MB", "fetched by PC",                 theme.ColAccent)
+	memRow("data memory",     "16 MB", "load/store + heap/stack",       lipgloss.Color("108"))
+	memRow("CLINT",           "mmio",  "0x02000000 · msip/mtimecmp/mtime", lipgloss.Color("141"))
+	memRow("UART TX",         "mmio",  "0x10000000",                    lipgloss.Color("173"))
 	memRow("UART RX",         "mmio",  "0x10000008 · status 0x1000000C", lipgloss.Color("173"))
 
 	// PERF COUNTERS section
 	section("performance counters", innerW)
-	kvRow("mcycle / minstret", "64-bit", "free-running, increments every retired insn")
-	kvRow("class counters",    "6 kinds", "mul · branch+taken · jump · load · store · trap")
+	kvRow("mcycle / minstret", "64-bit",  "free-running, increments every retired insn")
+	kvRow("mhpmcounter3..6",   "4 banks", "taken branch · load · store · mul/div (readable via CSR)")
+	kvRow("host-side mix",     "10 kinds", "mul · branch · taken · jump · load · store · trap · exc · int · wfi · csr")
 
 	// RESET section
 	section("reset semantics", innerW)
 	kvRow("program counter", "0x00000000", "fetch resumes at the reset vector")
 	kvRow("registers",       "x1..x31",    "zeroed in one clock via synchronous reset")
-	kvRow("CSRs",            "all",        "mstatus, mepc, mtvec, mcause, mtval, mscratch → 0")
+	kvRow("CSRs",            "all",        "mstatus, mie, mepc, mtvec, mcause, mtval, mscratch → 0")
+	kvRow("timer",           "disarmed",   "mtime = 0, mtimecmp = 0xFFFF'FFFF'FFFF'FFFF")
 	kvRow("memory",          "reloaded",   "fresh image flashed on every Reset action")
 
 	// QUICK START
