@@ -16,7 +16,7 @@ This is what end users actually install and run. Cross-platform Go, no cgo: the 
 Running `raijin` with no arguments opens the interactive menu:
 
 ```
-  ⚡ RAIJIN   v0.2.4                              RV32IM · single-cycle · 32 MB
+  ⚡ RAIJIN   v0.3.0                              RV32IM · single-cycle · 32 MB
 
   ▸ run doom                                                          ● ready
     run matrix                                                        ● ready

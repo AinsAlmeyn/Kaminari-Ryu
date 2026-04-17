@@ -47,7 +47,7 @@ The goal was never to build production silicon. The goal was to open up a CPU, u
 <summary><b>Interactive TUI menu</b></summary>
 
 ```
-  ⚡ RAIJIN   v0.2.4                              RV32IM · single-cycle · 32 MB
+  ⚡ RAIJIN   v0.3.0                              RV32IM · single-cycle · 32 MB
 
   ▸ run doom                                                          ● ready
     run matrix                                                        ● ready

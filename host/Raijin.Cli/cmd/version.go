@@ -15,7 +15,7 @@ import (
 // Version is the SemVer literal. GitSHA is filled by the linker at build
 // time (see build.sh: -ldflags "-X …/cmd.GitSHA=…").
 var (
-	Version = "0.2.4"
+	Version = "0.3.0"
 	GitSHA  = "dev"
 )
 
