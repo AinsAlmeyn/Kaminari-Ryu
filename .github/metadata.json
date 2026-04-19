@@ -1,0 +1,1 @@
+{"description":"RISC-V CPU (RV32IM+Zicsr, single-cycle) designed from scratch in Verilog. Simulated via Verilator, driven by a cross-platform Go CLI with TUI. Ships Doom, Snake, Matrix & Donut as pre-compiled RISC-V binaries running on the simulated CPU. Prebuilt for Windows x64, Linux x64 & macOS ARM64."}
